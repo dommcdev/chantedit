@@ -56,12 +56,16 @@ pub fn prepare(
 
 impl Job {
     pub fn run(self) -> Result<(), String> {
-        if let Some(parent) = self.out.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let mut part = self.out.clone().into_os_string();
-        part.push(".part");
-        let part = PathBuf::from(part);
+        let parent = self
+            .out
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        // Each export owns its staging file, including simultaneous exports to
+        // the same destination. Keep it on the destination filesystem for rename.
+        let staging = TempDir::new_in(parent).map_err(|e| e.to_string())?;
+        let part = staging.path.join("output.pdf");
         let score = self.dir.path.join("score.pdf");
         let chords = self.dir.path.join("chords.pdf");
         let result = qpdf::run(&[
@@ -102,16 +106,67 @@ struct TempDir {
 
 impl TempDir {
     fn new() -> std::io::Result<TempDir> {
+        Self::new_in(&std::env::temp_dir())
+    }
+
+    fn new_in(parent: &Path) -> std::io::Result<TempDir> {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("chantedit-{}-{n}", std::process::id()));
-        fs::create_dir_all(&path)?;
-        Ok(TempDir { path })
+        loop {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(".chantedit-{}-{n}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(TempDir { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_exports_preserve_score_and_use_independent_staging() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path.join("source.pdf");
+        let out = dir.path.join("export.pdf");
+        let font = ChordFont::new("Sans", 12.0);
+        let page = |text: &str, y| PageItems {
+            width: 300.0,
+            height: 400.0,
+            items: vec![Item {
+                text: text.into(),
+                cx: 100.0,
+                baseline: y,
+            }],
+        };
+        write_overlay(&source, &[page("Original score", 200.0)], &font).unwrap();
+        let score = fs::read(&source).unwrap();
+        let a = prepare(&score, &[page("Dm", 100.0)], &font, &out).unwrap();
+        let b = prepare(&score, &[page("Am", 100.0)], &font, &out).unwrap();
+        let unrelated = out.with_extension("pdf.part");
+        fs::write(&unrelated, b"unrelated file").unwrap();
+        let a = std::thread::spawn(move || a.run());
+        let b = std::thread::spawn(move || b.run());
+        a.join().unwrap().unwrap();
+        b.join().unwrap().unwrap();
+        assert_eq!(fs::read(&source).unwrap(), score);
+        assert_eq!(fs::read(&unrelated).unwrap(), b"unrelated file");
+        let bytes = gtk::glib::Bytes::from_owned(fs::read(out).unwrap());
+        let pdf = crate::pdf::open(&bytes).unwrap();
+        assert_eq!(pdf.n_pages(), 1);
+        let page = pdf.page(0).unwrap();
+        assert_eq!(page.size(), (300.0, 400.0));
+        let text = page.text().unwrap();
+        assert!(text.contains("Original score"));
+        assert!(text.contains("Dm") || text.contains("Am"));
     }
 }

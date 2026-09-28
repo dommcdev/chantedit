@@ -70,6 +70,7 @@ impl Op {
 struct Snapshot {
     edits: Edits,
     sel: Option<u32>,
+    cursor: Option<Cursor>,
 }
 
 struct Drag {
@@ -88,6 +89,7 @@ pub struct Editor {
     pub source: Option<PathBuf>,
     pub page_sizes: Vec<(f64, f64)>,
     pub analyses: Vec<Option<Arc<analysis::Page>>>,
+    analysis_finished: Vec<bool>,
     pub font: ChordFont,
     pub layout: DocLayout,
     pub sel: Option<u32>,
@@ -115,6 +117,7 @@ impl Editor {
         let saved = (doc.edits.clone(), doc.settings.clone());
         let mut ed = Editor {
             analyses: vec![None; page_sizes.len()],
+            analysis_finished: vec![false; page_sizes.len()],
             page_sizes,
             doc,
             path,
@@ -154,6 +157,9 @@ impl Editor {
     pub fn mark_saved(&mut self, path: PathBuf) {
         self.path = Some(path);
         self.saved = (self.doc.edits.clone(), self.doc.settings.clone());
+        // A subsequent nudge must undo back to this saved state, even if it
+        // occurs within the key-repeat merge window.
+        self.last_op = None;
     }
 
     /// Display name: the saved file's or the source PDF's stem.
@@ -182,12 +188,24 @@ impl Editor {
     }
 
     pub fn analysis_done(&self) -> bool {
-        self.analyses.iter().all(Option::is_some)
+        self.analysis_finished.iter().all(|done| *done)
+    }
+
+    pub fn analysis_failed(&mut self, page: Option<usize>) {
+        match page {
+            Some(page) => {
+                if let Some(done) = self.analysis_finished.get_mut(page) {
+                    *done = true;
+                }
+            }
+            None => self.analysis_finished.fill(true),
+        }
     }
 
     pub fn set_analysis(&mut self, page: usize, a: Arc<analysis::Page>) {
         if let Some(slot) = self.analyses.get_mut(page) {
             *slot = Some(a);
+            self.analysis_finished[page] = true;
         }
         self.relayout();
         if self.started || self.cursor.is_some() || self.sel.is_some() {
@@ -252,7 +270,7 @@ impl Editor {
             self.placed(c.id)
                 .map(|p| (p.line.page, self.line(p.line).y, c.x))
         };
-        let mut v: Vec<(Option<(usize, f64, f64)>, u32)> = self
+        let mut v: Vec<_> = self
             .doc
             .edits
             .chords
@@ -291,16 +309,20 @@ impl Editor {
 
     fn push_undo(&mut self, op: Op, target: Option<u32>) {
         let now = Instant::now();
-        if let Some((last, t, at)) = self.last_op {
-            if op.merges() && last == op && t == target && now - at < MERGE_WINDOW {
-                self.last_op = Some((op, target, now));
-                return;
-            }
+        if let Some((last, t, at)) = self.last_op
+            && op.merges()
+            && last == op
+            && t == target
+            && now - at < MERGE_WINDOW
+        {
+            self.last_op = Some((op, target, now));
+            return;
         }
         self.last_op = Some((op, target, now));
         self.undo.push(Snapshot {
             edits: self.doc.edits.clone(),
             sel: self.sel,
+            cursor: self.cursor,
         });
         if self.undo.len() > UNDO_LIMIT {
             self.undo.remove(0);
@@ -314,6 +336,7 @@ impl Editor {
                 self.redo.push(Snapshot {
                     edits: self.doc.edits.clone(),
                     sel: self.sel,
+                    cursor: self.cursor,
                 });
                 self.restore(s);
             }
@@ -327,6 +350,7 @@ impl Editor {
                 self.undo.push(Snapshot {
                     edits: self.doc.edits.clone(),
                     sel: self.sel,
+                    cursor: self.cursor,
                 });
                 self.restore(s);
             }
@@ -341,6 +365,7 @@ impl Editor {
             self.cancel_edit();
         }
         self.sel = None;
+        self.cursor = s.cursor;
         self.relayout();
         if let Some(id) = s.sel.filter(|&id| self.doc.edits.chord(id).is_some()) {
             self.select_chord(id, true);
@@ -362,14 +387,12 @@ impl Editor {
         }
         self.sel = Some(id);
         self.cursor = Some(cursor);
-        if reveal {
-            if let Some(p) = self.placed(id) {
-                self.effects.push(Effect::Reveal {
-                    page: p.line.page,
-                    x: cursor.x,
-                    y: p.baseline,
-                });
-            }
+        if reveal && let Some(p) = self.placed(id) {
+            self.effects.push(Effect::Reveal {
+                page: p.line.page,
+                x: cursor.x,
+                y: p.baseline,
+            });
         }
     }
 
@@ -387,7 +410,8 @@ impl Editor {
     pub fn place_cursor(&mut self, page: usize, x: f64, y: f64) {
         self.sel = None;
         let Some(r) = self.layout.nearest_line(page, y) else {
-            if self.analyses.get(page).is_some_and(Option::is_none) {
+            self.cursor = None;
+            if self.analysis_finished.get(page) == Some(&false) {
                 self.toast("Still analysing this page…");
             } else {
                 self.toast("No chord lines on this page. Ctrl+click to add one.");
@@ -434,17 +458,17 @@ impl Editor {
         } else {
             need
         };
-        if nx + w / 2.0 > line.x1 + self.font.size() {
-            if let Some(next) = self.layout.adjacent(r, 1) {
-                let l = self.line(next);
-                let x0 = l.x0 + w / 2.0;
-                let x0 = if snap {
-                    l.next_note(l.x0 + w / 4.0, 1, 0.0).unwrap_or(x0)
-                } else {
-                    x0
-                };
-                return (next, x0);
-            }
+        if nx + w / 2.0 > line.x1 + self.font.size()
+            && let Some(next) = self.layout.adjacent(r, 1)
+        {
+            let l = self.line(next);
+            let x0 = l.x0 + w / 2.0;
+            let x0 = if snap {
+                l.next_note(l.x0 + w / 4.0, 1, 0.0).unwrap_or(x0)
+            } else {
+                x0
+            };
+            return (next, x0);
         }
         (r, nx)
     }
@@ -694,7 +718,8 @@ impl Editor {
     }
 
     /// Back to the detected lines: removes manual lines (moving their chords to
-    /// the nearest detected line) and restores hidden and moved lines.
+    /// the nearest detected line) and restores hidden and moved lines. Keeps
+    /// manual lines on pages where no staves were detected.
     pub fn reset_lines(&mut self) {
         self.push_undo(Op::ResetLines, None);
         let manual: Vec<(u32, usize, f64)> = self
@@ -710,7 +735,15 @@ impl Editor {
             })
             .collect();
         self.doc.edits.staff_lines.clear();
-        self.doc.edits.manual_lines.clear();
+        // A page with no detected staves still needs its manual lines. Dropping
+        // them would silently delete all of the user's chords on that page.
+        self.doc.edits.manual_lines.retain(|m| {
+            !self
+                .analyses
+                .get(m.page)
+                .and_then(|a| a.as_ref())
+                .is_some_and(|a| !a.staves.is_empty())
+        });
         self.relayout();
         for (id, page, y) in manual {
             match self
@@ -727,11 +760,17 @@ impl Editor {
             .is_some_and(|id| self.doc.edits.chord(id).is_none())
         {
             self.sel = None;
+            if self.editing {
+                self.cancel_edit();
+            }
         }
         if self.cursor_line().is_none() {
             self.cursor = None;
         }
         self.relayout();
+        if let Some(id) = self.sel {
+            self.select_chord(id, false);
+        }
         self.toast("Chord lines reset to the detected positions");
     }
 
@@ -759,7 +798,9 @@ impl Editor {
         });
         let x = self.cursor.map_or(x0 + 20.0, |c| c.x).clamp(x0, x1);
         self.sel = None;
-        self.editing = false;
+        if self.editing {
+            self.cancel_edit();
+        }
         self.cursor = Some(Cursor {
             anchor: Anchor::Manual { id },
             x,
@@ -792,7 +833,9 @@ impl Editor {
         }
         if self.sel.is_some_and(|id| doomed.contains(&id)) {
             self.sel = None;
-            self.editing = false;
+            if self.editing {
+                self.cancel_edit();
+            }
         }
         if self.cursor_line() == Some(r) {
             self.cursor = None;
@@ -858,7 +901,9 @@ impl Editor {
         self.push_undo(Op::Delete, Some(del.id));
         self.doc.edits.chords.retain(|c| c.id != del.id);
         self.sel = None;
-        self.editing = false;
+        if self.editing {
+            self.cancel_edit();
+        }
         self.cursor = Some(Cursor {
             anchor: del.anchor,
             x: del.x,
@@ -996,5 +1041,119 @@ impl Editor {
             }
         }
         pages
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn editor() -> Editor {
+        let doc = Document::new(Vec::new(), "score.pdf".into(), Settings::default());
+        let mut ed = Editor::new(doc, None, None, vec![(600.0, 800.0)]);
+        ed.add_line_at(0, 100.0);
+        ed.take_effects();
+        ed
+    }
+
+    fn insert(ed: &mut Editor, text: &str) {
+        ed.pending = text.into();
+        ed.commit_entry();
+    }
+
+    #[test]
+    fn insert_undo_restores_insertion_point_and_redo_selection() {
+        let mut ed = editor();
+        let cursor = ed.cursor;
+        insert(&mut ed, "C F Dm");
+        assert_eq!(ed.doc.edits.chords.len(), 3);
+        let chords = ed.doc.edits.chords.clone();
+        let selection = ed.sel;
+        ed.undo();
+        assert!(ed.doc.edits.chords.is_empty());
+        assert_eq!(ed.cursor, cursor);
+        ed.redo();
+        assert_eq!(ed.doc.edits.chords, chords);
+        assert_eq!(ed.sel, selection);
+    }
+
+    #[test]
+    fn undo_line_removal_restores_cursor() {
+        let mut ed = editor();
+        let cursor = ed.cursor;
+        ed.remove_active_line();
+        assert!(ed.cursor.is_none());
+        ed.undo();
+        assert_eq!(ed.cursor, cursor);
+        insert(&mut ed, "Am");
+        assert_eq!(ed.doc.edits.chords.len(), 1);
+    }
+
+    #[test]
+    fn reset_keeps_manual_chords_on_undetected_pages() {
+        let mut ed = editor();
+        ed.set_analysis(
+            0,
+            Arc::new(analysis::Page::analyze(&[255; 100], 10, 10, 600.0, 800.0)),
+        );
+        insert(&mut ed, "C Dm");
+        let chords = ed.doc.edits.chords.clone();
+        ed.reset_lines();
+        assert_eq!(ed.doc.edits.chords, chords);
+        assert!(chords.iter().all(|c| ed.placed(c.id).is_some()));
+    }
+
+    #[test]
+    fn removing_edited_chord_clears_entry() {
+        for operation in [
+            Editor::remove_active_line,
+            |ed: &mut Editor| ed.delete_selected(false),
+            |ed: &mut Editor| ed.add_line_at(0, 200.0),
+        ] {
+            let mut ed = editor();
+            insert(&mut ed, "C");
+            ed.start_edit(ed.sel.unwrap());
+            ed.take_effects();
+            operation(&mut ed);
+            assert!(!ed.editing);
+            assert!(ed.pending.is_empty());
+            assert!(
+                ed.take_effects()
+                    .iter()
+                    .any(|e| matches!(e, Effect::SetEntry(t) if t.is_empty()))
+            );
+        }
+    }
+
+    #[test]
+    fn failed_analysis_allows_manual_editing_and_export() {
+        let mut ed = editor();
+        assert!(!ed.analysis_done());
+        ed.analysis_failed(Some(0));
+        assert!(ed.analysis_done());
+        insert(&mut ed, "Dm");
+        assert_eq!(ed.export_pages()[0].items[0].text, "Dm");
+    }
+
+    #[test]
+    fn save_separates_repeated_nudges_in_undo_history() {
+        let mut ed = editor();
+        insert(&mut ed, "C");
+        ed.nudge(1.0);
+        ed.mark_saved("test.ce".into());
+        let x = ed.selected().unwrap().x;
+        ed.nudge(1.0);
+        ed.undo();
+        assert_eq!(ed.selected().unwrap().x, x);
+        assert!(!ed.is_dirty());
+    }
+
+    #[test]
+    fn clicking_page_without_lines_does_not_insert_on_previous_page() {
+        let mut ed = editor();
+        ed.place_cursor(1, 100.0, 100.0);
+        insert(&mut ed, "C");
+        assert!(ed.doc.edits.chords.is_empty());
+        assert_eq!(ed.pending, "C");
     }
 }

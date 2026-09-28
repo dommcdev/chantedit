@@ -62,11 +62,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if !args.dump {
-        if let Err(e) = std::fs::create_dir_all(&args.out) {
-            eprintln!("{}: {e}", args.out.display());
-            return ExitCode::FAILURE;
-        }
+    if !args.dump
+        && let Err(e) = std::fs::create_dir_all(&args.out)
+    {
+        eprintln!("{}: {e}", args.out.display());
+        return ExitCode::FAILURE;
     }
     let mut ok = true;
     for path in &args.files {

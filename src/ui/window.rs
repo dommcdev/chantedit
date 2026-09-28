@@ -92,7 +92,10 @@ pub struct Window {
 impl Window {
     pub fn new(app: &adw::Application) -> Rc<Window> {
         let prefs = Prefs::load();
-        let zoom = prefs.zoom.unwrap_or(DEFAULT_ZOOM);
+        let zoom = prefs
+            .zoom
+            .unwrap_or(DEFAULT_ZOOM)
+            .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
         let win = adw::ApplicationWindow::builder()
             .application(app)
             .default_width(1300)
@@ -435,14 +438,14 @@ impl Window {
         let wk = weak.clone();
         key.connect_key_pressed(move |_, key, _, state| {
             let handled = wk.upgrade().is_some_and(|w| w.handle_key(key, state));
-            glib::Propagation::from(!handled)
+            glib::Propagation::from(handled)
         });
         self.win.add_controller(key);
 
         let wk = weak.clone();
         self.win.connect_close_request(move |_| {
             let stop = wk.upgrade().is_some_and(|w| w.on_close_request());
-            glib::Propagation::from(!stop)
+            glib::Propagation::from(stop)
         });
 
         let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
@@ -1008,23 +1011,23 @@ impl Window {
                     &alpha(&accent, 0.7),
                 );
             }
-        } else if let (None, Some(cur), Some(r)) = (ed.sel, ed.cursor, ed.cursor_line()) {
-            if r.page == page {
-                let y = ed.layout.line(r).y;
-                let (x, half) = (cur.x, ed.font.cap_height() * 0.9);
-                snap.append_stroke(
-                    &segment(x, y - half, x, y + half),
-                    &gsk::Stroke::new(1.5 / z),
-                    &accent,
-                );
-                let (x, top, tri) = (x as f32, (y - half) as f32, 2.5);
-                let path = gsk::PathBuilder::new();
-                path.move_to(x - tri, top - tri);
-                path.line_to(x + tri, top - tri);
-                path.line_to(x, top);
-                path.close();
-                snap.append_fill(&path.to_path(), gsk::FillRule::Winding, &accent);
-            }
+        } else if let (None, Some(cur), Some(r)) = (ed.sel, ed.cursor, ed.cursor_line())
+            && r.page == page
+        {
+            let y = ed.layout.line(r).y;
+            let (x, half) = (cur.x, ed.font.cap_height() * 0.9);
+            snap.append_stroke(
+                &segment(x, y - half, x, y + half),
+                &gsk::Stroke::new(1.5 / z),
+                &accent,
+            );
+            let (x, top, tri) = (x as f32, (y - half) as f32, 2.5);
+            let path = gsk::PathBuilder::new();
+            path.move_to(x - tri, top - tri);
+            path.line_to(x + tri, top - tri);
+            path.line_to(x, top);
+            path.close();
+            snap.append_fill(&path.to_path(), gsk::FillRule::Winding, &accent);
         }
         snap.restore();
     }
@@ -1219,8 +1222,17 @@ impl Window {
                     p.set_texture(Some((texture.upcast(), rs.scale)));
                 }
             }
-            Msg::Failed { doc, message } if doc == self.doc_id.get() => {
+            Msg::Failed { doc, page, message } if doc == self.doc_id.get() => {
+                self.edit(|ed| ed.analysis_failed(page));
                 self.toast(&format!("Could not analyse the score: {message}"));
+            }
+            Msg::RenderFailed {
+                doc,
+                page,
+                epoch,
+                message,
+            } if doc == self.doc_id.get() && epoch == self.render.borrow().epoch => {
+                self.toast(&format!("Could not render page {}: {message}", page + 1));
             }
             _ => {}
         }
@@ -1250,10 +1262,8 @@ impl Window {
         if let Some(dir) = self.current_dir() {
             dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
         }
-        if let Ok(path) = dialog.open_future(Some(&self.win)).await.map(|f| f.path()) {
-            if let Some(path) = path {
-                self.open(path).await;
-            }
+        if let Ok(Some(path)) = dialog.open_future(Some(&self.win)).await.map(|f| f.path()) {
+            self.open(path).await;
         }
     }
 
@@ -1392,6 +1402,7 @@ impl Window {
     /// Saves the document, asking for a file name if needed. Returns whether
     /// it was saved.
     async fn save(self: &Rc<Self>, save_as: bool) -> bool {
+        let doc_id = self.doc_id.get();
         let (current, name, dir, source) = {
             let st = self.editor.borrow();
             let Some(ed) = st.as_ref() else { return false };
@@ -1434,6 +1445,9 @@ impl Window {
                 }
             }
         };
+        if self.doc_id.get() != doc_id {
+            return false;
+        }
         let result = self.editor.borrow().as_ref().map(|ed| ed.doc.save(&path));
         match result {
             Some(Ok(())) => {
@@ -1470,6 +1484,7 @@ impl Window {
     }
 
     async fn export_as(self: Rc<Self>) {
+        let doc_id = self.doc_id.get();
         let Some((default, _)) = self.default_export_path() else {
             return;
         };
@@ -1491,6 +1506,7 @@ impl Window {
             .await
             .ok()
             .and_then(|f| f.path())
+            && self.doc_id.get() == doc_id
         {
             self.export(Some(path)).await;
         }
@@ -1512,7 +1528,27 @@ impl Window {
                 self.toast("Still finding chord lines, try again in a moment");
                 return;
             }
-            let protected = [ed.source.as_deref(), ed.path.as_deref()];
+            if ed
+                .doc
+                .edits
+                .chords
+                .iter()
+                .any(|c| ed.placed(c.id).is_none())
+            {
+                drop(st);
+                self.toast("Some chords have no chord line. Restore their lines before exporting.");
+                return;
+            }
+            let original = ed.dir().and_then(|dir| {
+                Path::new(&ed.doc.source_name)
+                    .file_name()
+                    .map(|name| dir.join(name))
+            });
+            let protected = [
+                ed.source.as_deref(),
+                ed.path.as_deref(),
+                original.as_deref(),
+            ];
             if protected.iter().flatten().any(|p| same_file(p, &out)) {
                 drop(st);
                 self.toast("Choose a different name: that would overwrite the score");
@@ -1566,6 +1602,13 @@ impl Window {
         let Some(current) = current else { return };
         let Some(folder) = current.parent() else {
             return;
+        };
+        // Saving replaces a PDF with its .ce twin in the folder list. Compare
+        // against that twin too, so Previous does not reopen the same piece.
+        let current = if !files::is_document(&current) && files::document_for(&current).exists() {
+            files::document_for(&current)
+        } else {
+            current.clone()
         };
         let cur = current.to_string_lossy();
         let pieces = files::pieces_in(folder);
@@ -1842,5 +1885,80 @@ fn tilde(path: &Path) -> String {
     match path.strip_prefix(&home) {
         Ok(rest) => format!("~/{}", rest.display()),
         Err(_) => path.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a GTK display; run with --ignored --test-threads=1"]
+    fn keyboard_and_close_event_routing() {
+        adw::init().unwrap();
+        let app = adw::Application::builder()
+            .application_id("dev.dominic.ChantEdit.Tests")
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        app.register(gio::Cancellable::NONE).unwrap();
+        let w = Window::new(&app);
+        let sizes = vec![(600.0, 800.0)];
+        let doc = Document::new(Vec::new(), "test.pdf".into(), Settings::default());
+        w.editor
+            .replace(Some(Editor::new(doc, None, None, sizes.clone())));
+        w.build_pages(&sizes);
+        w.set_document_open(true);
+        w.win.present();
+        w.refocus();
+        let context = glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert!(w.sb.entry_focused(&w.win));
+
+        let controllers = w.win.observe_controllers();
+        let key = (0..controllers.n_items())
+            .find_map(|i| {
+                controllers
+                    .item(i)
+                    .and_downcast::<gtk::EventControllerKey>()
+            })
+            .unwrap();
+        let press = |k: gdk::Key| {
+            key.emit_by_name::<bool>("key-pressed", &[&k, &0u32, &gdk::ModifierType::empty()])
+        };
+        // Ordinary typing and Enter must reach the entry; editor navigation
+        // must stop here, rather than also navigating GTK widgets.
+        assert!(!press(gdk::Key::C));
+        assert!(!press(gdk::Key::Return));
+        w.edit(|ed| ed.add_line_at(0, 100.0));
+        w.sb.entry.set_text("C F Dm");
+        w.sb.entry.emit_by_name::<()>("entry-activated", &[]);
+        assert_eq!(
+            w.editor.borrow().as_ref().unwrap().doc.edits.chords.len(),
+            3
+        );
+        assert!(w.sb.entry.text().is_empty());
+        assert!(press(gdk::Key::Left));
+
+        // A dirty close must stop GTK's default destruction, then allow Cancel.
+        assert!(w.win.emit_by_name::<bool>("close-request", &[]));
+        while context.pending() {
+            context.iteration(false);
+        }
+        let dialog = w
+            .win
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        dialog.emit_by_name::<()>("response", &[&"cancel"]);
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert!(w.win.is_visible());
+        assert!(!w.may_close.get());
+        w.context_menu.unparent();
+        w.win.destroy();
     }
 }

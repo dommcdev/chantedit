@@ -43,9 +43,10 @@ impl Prefs {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        if !(p.defaults.size > 0.0) {
+        if !p.defaults.size.is_finite() || p.defaults.size <= 0.0 {
             p.defaults = Settings::default();
         }
+        p.zoom = p.zoom.filter(|z| z.is_finite() && *z > 0.0);
         p
     }
 

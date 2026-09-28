@@ -22,6 +22,13 @@ pub enum Msg {
     },
     Failed {
         doc: u64,
+        page: Option<usize>,
+        message: String,
+    },
+    RenderFailed {
+        doc: u64,
+        page: usize,
+        epoch: u64,
         message: String,
     },
 }
@@ -56,18 +63,21 @@ impl Workers {
         thread::Builder::new()
             .name("analysis".into())
             .spawn(move || {
-                let fail = |message: String| {
-                    let _ = tx.send_blocking(Msg::Failed { doc, message });
+                let fail = |page, message: String| {
+                    let _ = tx.send_blocking(Msg::Failed { doc, page, message });
                 };
                 let pdf = match pdf::open(&bytes) {
                     Ok(p) => p,
-                    Err(e) => return fail(e.to_string()),
+                    Err(e) => return fail(None, e.to_string()),
                 };
                 for i in 0..pdf.n_pages() {
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
-                    let Some(page) = pdf.page(i) else { continue };
+                    let Some(page) = pdf.page(i) else {
+                        fail(Some(i as usize), format!("page {} is unavailable", i + 1));
+                        continue;
+                    };
                     match pdf::analyze_page(&page) {
                         Ok(a) => {
                             let msg = Msg::Analysed {
@@ -79,7 +89,7 @@ impl Workers {
                                 return;
                             }
                         }
-                        Err(e) => fail(format!("page {}: {e}", i + 1)),
+                        Err(e) => fail(Some(i as usize), format!("page {}: {e}", i + 1)),
                     }
                 }
             })
@@ -90,18 +100,32 @@ impl Workers {
         thread::Builder::new()
             .name("render".into())
             .spawn(move || {
-                let Ok(pdf) = pdf::open(&pdf_bytes) else {
-                    return;
-                };
+                let pdf = pdf::open(&pdf_bytes);
                 for job in rx {
                     if job.epoch != current.load(Ordering::Relaxed) {
                         continue;
                     }
-                    let Some(page) = pdf.page(job.page as i32) else {
-                        continue;
-                    };
-                    let Ok(r) = pdf::render(&page, job.scale, false) else {
-                        continue;
+                    let result = pdf
+                        .as_ref()
+                        .map_err(ToString::to_string)
+                        .and_then(|pdf| {
+                            pdf.page(job.page as i32)
+                                .ok_or_else(|| "page is unavailable".to_owned())
+                        })
+                        .and_then(|page| {
+                            pdf::render(&page, job.scale, false).map_err(|e| e.to_string())
+                        });
+                    let r = match result {
+                        Ok(r) => r,
+                        Err(message) => {
+                            let _ = out.send_blocking(Msg::RenderFailed {
+                                doc,
+                                page: job.page,
+                                epoch: job.epoch,
+                                message,
+                            });
+                            continue;
+                        }
                     };
                     let image = Image {
                         width: r.width as i32,

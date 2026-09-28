@@ -64,7 +64,7 @@ pub fn analyze_page(page: &poppler::Page) -> Result<analysis::Page, cairo::Error
     let r = render(page, analysis::DPI / 72.0, true)?;
     let mut gray = Vec::with_capacity(r.width * r.height);
     for row in r.data.chunks_exact(r.stride).take(r.height) {
-        gray.extend(row[..r.width * 4].chunks_exact(4).map(|px| {
+        gray.extend(row[..r.width * 4].as_chunks::<4>().0.iter().map(|px| {
             let (b, g, r) = (u32::from(px[0]), u32::from(px[1]), u32::from(px[2]));
             ((b * 29 + g * 150 + r * 77) >> 8) as u8
         }));

@@ -213,7 +213,9 @@ fn text_region(dark: &[u8], w: usize, h: usize, s: f64, staves: &[Staff], i: usi
         .find(|o| o.bottom < st.top && o.x1.min(st.x1) - o.x0.max(st.x0) > 0.0)
         .map_or(limit, |o| limit.max(o.bottom * s + 0.5 * sp_px));
     let ri0 = (r0 as isize).max(0) as usize;
-    let ri1 = (ri0 + 1).max((top_px - 0.15 * sp_px) as isize as usize);
+    let ri1 = (ri0 + 1)
+        .max((top_px - 0.15 * sp_px).max(0.0) as usize)
+        .min(h);
     let c0 = ((st.x0 * s) as usize).min(w);
     let c1 = ((st.x1 * s) as usize).min(w);
     let n = ri1 - ri0;
@@ -549,6 +551,17 @@ fn median(values: impl Iterator<Item = f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staff_at_top_edge_has_bounded_text_region() {
+        let mut gray = vec![255; 200 * 200];
+        for y in [0, 4, 8, 12] {
+            gray[y * 200 + 10..y * 200 + 190].fill(0);
+        }
+        let page = Page::analyze(&gray, 200, 200, 200.0, 200.0);
+        assert_eq!(page.staves.len(), 1);
+        assert!(page.fit_line(0, 6.5).y.is_finite());
+    }
 
     #[test]
     fn bitmap_counts_match_naive() {
