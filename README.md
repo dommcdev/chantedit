@@ -59,3 +59,8 @@ cargo test --bin chantedit keyboard_and_close_event_routing -- --ignored --test-
 
 Sample-score tests use `~/Downloads/Chant` (or `CHANTEDIT_SAMPLES`) and skip
 missing scores. Run `make` to build release binaries in `bin/`.
+
+## License
+
+ChantEdit is free software, licensed under the
+[GNU General Public License, version 3 or later](LICENSE).
