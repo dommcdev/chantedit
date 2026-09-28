@@ -130,7 +130,7 @@ func (w *Window) runCommand(cmd string) error {
 		}
 		act.Activate(nil)
 	case "quit":
-		w.win.Close()
+		w.quit()
 	default:
 		return fmt.Errorf("unknown command")
 	}
@@ -138,5 +138,8 @@ func (w *Window) runCommand(cmd string) error {
 }
 
 func (w *Window) snapshotPNG(path string) error {
+	if d := w.win.VisibleDialog(); d != nil {
+		return snapshotWidgetPNG(d, path)
+	}
 	return snapshotWidgetPNG(w.win.Content(), path)
 }

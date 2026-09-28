@@ -14,8 +14,13 @@ make            # first build compiles gotk4 and takes several minutes
 make install    # optional: ~/.local/bin/chantedit + desktop entry
 ```
 
-Needs: `go`, `gtk4`, `libadwaita`, `poppler-glib`, `qpdf` (export falls back to
-re-rendering pages if qpdf is missing).
+Build needs `go` plus the system `gtk4`, `libadwaita` (≥ 1.8), `poppler-glib`
+and `cairo` headers; at runtime `qpdf` is used for export (it falls back to
+re-rendering pages if qpdf is missing). On Arch:
+`pacman -S go gtk4 libadwaita poppler-glib qpdf`.
+
+The first build is slow because the gotk4 bindings are thousands of
+generated cgo files; Go caches them, so later builds take a couple of seconds.
 
 ## Workflow
 
@@ -38,7 +43,7 @@ Everything is saved automatically to `~/.local/share/chantedit/docs/`, keyed by
 a hash of the PDF, so reopening a file (even renamed or moved) brings your
 chords back. Text size/font/options are remembered for the next file.
 
-The full shortcut list is in the sidebar (F1).
+F1 opens the full list of keyboard shortcuts.
 
 ## How line detection works
 

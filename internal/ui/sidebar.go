@@ -22,32 +22,7 @@ type sidebar struct {
 	snap    *adw.SwitchRow
 	offset  *adw.SpinRow
 	guides  *adw.SwitchRow
-	keys    *adw.ExpanderRow
 	syncing bool
-}
-
-var shortcuts = [][2]string{
-	{"Enter", "Add typed chord(s); several at once with spaces"},
-	{"Click", "Put the cursor on the nearest chord line"},
-	{"Drag", "Move a chord (also to another line)"},
-	{"← →", "Nudge chord / cursor"},
-	{"Shift ← →", "Nudge in bigger steps"},
-	{"Ctrl ← →", "Jump to previous / next note"},
-	{"↑ ↓", "Move to previous / next chord line"},
-	{"Shift ↑ ↓", "Raise / lower only this chord"},
-	{"Ctrl ↑ ↓", "Raise / lower the whole line"},
-	{"Ctrl R", "Reset chord to automatic height"},
-	{"Tab  Shift Tab", "Select next / previous chord"},
-	{"Home  End", "Select first / last chord"},
-	{"F2  Enter  Double-click", "Edit selected chord"},
-	{"Backspace  Delete", "Delete selected chord"},
-	{"Esc", "Cancel edit / deselect"},
-	{"Ctrl Z  Ctrl Shift Z", "Undo / redo"},
-	{"Ctrl Click", "Add a chord line where detection missed one"},
-	{"Ctrl E", "Export PDF with chords"},
-	{"Alt PgUp  Alt PgDn", "Previous / next PDF in folder"},
-	{"Ctrl scroll  Ctrl + −  Ctrl 0", "Zoom / fit width"},
-	{"Ctrl G", "Show / hide guide lines"},
 }
 
 func (w *Window) buildSidebar() gtk.Widgetter {
@@ -114,23 +89,6 @@ func (w *Window) buildSidebar() gtk.Widgetter {
 	reset.ConnectActivated(w.resetLines)
 	sb.lineGp.Add(reset)
 	page.Add(sb.lineGp)
-
-	// Keyboard help
-	kg := adw.NewPreferencesGroup()
-	sb.keys = adw.NewExpanderRow()
-	sb.keys.SetTitle("Keyboard Shortcuts")
-	sb.keys.SetSubtitle("F1")
-	for _, s := range shortcuts {
-		r := adw.NewActionRow()
-		r.SetTitle(html.EscapeString(s[1]))
-		k := gtk.NewLabel(s[0])
-		k.AddCSSClass("dim-label")
-		k.AddCSSClass("shortcut-key")
-		r.AddSuffix(k)
-		sb.keys.AddRow(r)
-	}
-	kg.Add(sb.keys)
-	page.Add(kg)
 
 	// Handlers
 	settingsChanged := func(fontChanged bool) {

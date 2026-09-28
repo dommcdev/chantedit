@@ -705,7 +705,7 @@ func (w *Window) refocus() {
 }
 
 func (w *Window) onKey(keyval uint, state gdk.ModifierType) bool {
-	if w.data == nil {
+	if w.data == nil || w.win.VisibleDialog() != nil {
 		return false
 	}
 	ctrl := state&gdk.ControlMask != 0

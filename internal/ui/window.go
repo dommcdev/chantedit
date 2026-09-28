@@ -210,8 +210,7 @@ func newWindow(app *adw.Application) *Window {
 
 	css := gtk.NewCSSProvider()
 	css.LoadFromString(`.chant-canvas { background-color: alpha(@window_fg_color, 0.08); }
-.chant-page { box-shadow: 0 1px 4px alpha(black, 0.35); }
-.shortcut-key { font-family: monospace; font-size: 0.9em; }`)
+.chant-page { box-shadow: 0 1px 4px alpha(black, 0.35); }`)
 	gtk.StyleContextAddProviderForDisplay(gdk.DisplayGetDefault(), css, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 	key := gtk.NewEventControllerKey()
@@ -251,11 +250,15 @@ func (w *Window) addActions() {
 	add("toggle-sidebar", func() { w.split.SetShowSidebar(!w.split.ShowSidebar()) })
 	add("remove-line", w.removeCurrentLine)
 	add("reset-lines", w.resetLines)
-	add("shortcuts", func() {
-		w.split.SetShowSidebar(true)
-		w.sb.keys.SetExpanded(!w.sb.keys.Expanded())
-	})
-	add("quit", func() { w.win.Close() })
+	add("shortcuts", w.showShortcuts)
+	add("quit", w.quit)
+}
+
+func (w *Window) quit() {
+	if d := w.win.VisibleDialog(); d != nil {
+		d.ForceClose()
+	}
+	w.win.Close()
 }
 
 func (w *Window) setDocSensitive(on bool) {
