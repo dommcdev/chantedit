@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ChantEdit
+Comment=Add guitar chords above chant scores
+Exec=chantedit %f
+Icon=folder-music
+Terminal=false
+Categories=AudioVideo;Audio;Music;Office;
+MimeType=application/pdf;
+StartupNotify=true
