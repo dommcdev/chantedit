@@ -1,26 +1,47 @@
 # ChantEdit
 
-Add guitar chord names above chant (or other) scores in PDF files, fast and
-mostly from the keyboard. Chord lines are detected automatically for every
-staff, so you only choose *which note* a chord goes over, never its height.
+Add guitar chord names above chant (or other) scores, fast and mostly from the
+keyboard. Chord lines are detected automatically for every staff, so you only
+choose *which note* a chord goes over, never its height.
 
-Go + GTK4/libadwaita (gotk4), Poppler for rendering, qpdf for export.
+Rust + GTK 4 / libadwaita. Poppler renders the score; libqpdf stamps chords onto
+the original pages so the music stays vector.
 
 ## Build & run
 
 ```sh
-make            # first build compiles gotk4 and takes several minutes
+make            # first build compiles gtk-rs and takes a minute or two
 ./bin/chantedit "~/Downloads/Chant/Te Deum (Simple tone).pdf"
 make install    # optional: ~/.local/bin/chantedit + desktop entry
 ```
 
-Build needs `go` plus the system `gtk4`, `libadwaita` (≥ 1.8), `poppler-glib`
-and `cairo` headers; at runtime `qpdf` is used for export (it falls back to
-re-rendering pages if qpdf is missing). On Arch:
-`pacman -S go gtk4 libadwaita poppler-glib qpdf`.
+On Arch: `pacman -S rust gtk4 libadwaita poppler-glib qpdf`.
 
-The first build is slow because the gotk4 bindings are thousands of
-generated cgo files; Go caches them, so later builds take a couple of seconds.
+The first compile is slow because of the gtk-rs crates. Later rebuilds take a
+few seconds.
+
+## Documents
+
+Work is saved as a `.ce` file, not in `~/.local`. A `.ce` is a zip archive:
+
+```
+mimetype      application/x-chantedit
+chords.json   settings, chords and line edits
+score.pdf     the original PDF, byte for byte
+```
+
+The score travels inside the file, so a `.ce` still opens after the PDF is
+moved, renamed, or gone — useful if you wipe machines and keep a folder of
+pieces.
+
+- **Open a PDF:** starts a new document. Ctrl+S writes `Name.ce` next to it.
+- **Open a `.ce`:** keeps editing that document.
+- **Open a PDF that already has a `.ce` next to it:** opens the saved document.
+
+The original PDF is never modified. Export writes `Name (chords).pdf`.
+
+App preferences (last folder, zoom, guide lines, default font/size) still live
+in `~/.config/chantedit/prefs.json`.
 
 ## Workflow
 
@@ -35,20 +56,15 @@ generated cgo files; Go caches them, so later builds take a couple of seconds.
    - Ctrl+↑ ↓ raise/lower the whole line
 4. Click anywhere to put the cursor on the nearest line. Drag chords with the
    mouse. Tab / Shift+Tab walk through chords, Backspace deletes.
-5. Ctrl+E exports `Name (chords).pdf` next to the original (or into
-   `~/Documents/Chant with chords/` if that folder is read-only).
-   Alt+Page Down opens the next PDF in the folder.
-
-Everything is saved automatically to `~/.local/share/chantedit/docs/`, keyed by
-a hash of the PDF, so reopening a file (even renamed or moved) brings your
-chords back. Text size/font/options are remembered for the next file.
+5. Ctrl+S saves the `.ce`. Ctrl+E exports a PDF with the chords drawn on.
+   Alt+Page Down opens the next piece in the folder.
 
 F1 opens the full list of keyboard shortcuts.
 
 ## How line detection works
 
-`internal/analysis` works purely on a 150 dpi render, so it doesn't matter
-whether the PDF is vector, text, or a scan:
+Analysis is on a 150 dpi render, so it does not matter whether the PDF is
+vector, text, or a scan:
 
 1. **Staff lines** are rows containing long horizontal dark runs; lines with
    regular spacing are grouped into staves (3–6 lines, so 4-line chant and
@@ -78,14 +94,13 @@ make detect PDF="some score.pdf"   # overlays in /tmp/chantdetect
 ## Layout
 
 ```
-main.go                  app entry
-internal/analysis        staff / chord-line / note detection (pure Go)
-internal/layout          lines + chord placement + text drawing (shared by UI and export)
-internal/doc             saved data + preferences
-internal/export          PDF export (cairo overlay + qpdf)
-internal/poppler         tiny cgo wrapper for poppler-glib
-internal/ui              libadwaita window, page view, keyboard handling
-cmd/chantdetect          debug tool that draws detection results to PNGs
+src/analysis.rs     staff / chord-line / note detection
+src/layout.rs       lines + chord placement + text drawing
+src/document.rs     the .ce format
+src/pdf.rs          Poppler rendering
+src/export.rs       cairo overlay + libqpdf stamp
+src/ui/             libadwaita window, page view, keyboard handling
+src/bin/chantdetect.rs   debug tool that draws detection results to PNGs
 ```
 
-`CHANTEDIT_SCRIPT` drives the UI for testing (see `internal/ui/debug.go`).
+`CHANTEDIT_SCRIPT` drives the UI for testing (see `src/ui/window.rs`).
