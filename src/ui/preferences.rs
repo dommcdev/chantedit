@@ -1,13 +1,10 @@
-//! The sidebar: chord entry, text settings and line options.
+//! Chord text and placement settings in a libadwaita preferences dialog.
 
 use adw::prelude::*;
 
-pub struct Sidebar {
-    pub root: adw::PreferencesPage,
-    pub entry: adw::EntryRow,
-    pub chord_group: adw::PreferencesGroup,
+pub struct Preferences {
+    pub dialog: adw::PreferencesDialog,
     pub text_group: adw::PreferencesGroup,
-    pub line_group: adw::PreferencesGroup,
     pub font: gtk::FontDialogButton,
     pub size: adw::SpinRow,
     pub avoid: adw::SwitchRow,
@@ -17,16 +14,14 @@ pub struct Sidebar {
     pub reset: adw::ButtonRow,
 }
 
-impl Sidebar {
-    pub fn new() -> Sidebar {
-        let root = adw::PreferencesPage::new();
-
-        let chord_group = adw::PreferencesGroup::builder().title("Chord").build();
-        let entry = adw::EntryRow::builder()
-            .title("Type a chord, press Enter")
+impl Preferences {
+    pub fn new() -> Preferences {
+        let dialog = adw::PreferencesDialog::new();
+        let root = adw::PreferencesPage::builder()
+            .title("Score")
+            .icon_name("preferences-other-symbolic")
             .build();
-        chord_group.add(&entry);
-        root.add(&chord_group);
+        dialog.add(&root);
 
         let text_group = adw::PreferencesGroup::builder().title("Chord Text").build();
         let font = gtk::FontDialogButton::builder()
@@ -75,12 +70,9 @@ impl Sidebar {
         line_group.add(&reset);
         root.add(&line_group);
 
-        Sidebar {
-            root,
-            entry,
-            chord_group,
+        Preferences {
+            dialog,
             text_group,
-            line_group,
             font,
             size,
             avoid,
@@ -91,16 +83,9 @@ impl Sidebar {
         }
     }
 
-    /// Whether keyboard focus is in the chord entry.
-    pub fn entry_focused(&self, window: &impl IsA<gtk::Window>) -> bool {
-        gtk::prelude::GtkWindowExt::focus(window.as_ref()).is_some_and(|f| {
-            f == *self.entry.upcast_ref::<gtk::Widget>() || f.is_ancestor(&self.entry)
-        })
-    }
-
     pub fn set_document_open(&self, open: bool) {
-        self.chord_group.set_sensitive(open);
         self.text_group.set_sensitive(open);
-        self.line_group.set_sensitive(open);
+        self.offset.set_sensitive(open);
+        self.reset.set_sensitive(open);
     }
 }

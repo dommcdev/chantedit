@@ -11,16 +11,16 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, pango};
 
 use chantedit::document::{self, Document, Settings};
-use chantedit::layout::{self, ChordFont, LineRef};
+use chantedit::layout::{ChordFont, LineRef};
 use chantedit::prefs::Prefs;
 use chantedit::{export, pdf};
 
 use super::editor::{Editor, Effect, NUDGE, NUDGE_BIG, V_STEP};
 use super::files;
 use super::page::PageView;
+use super::preferences::Preferences;
 use super::render::{Msg, Workers};
 use super::shortcuts;
-use super::sidebar::Sidebar;
 
 const PAGE_MARGIN: f64 = 24.0;
 const PAGE_SPACING: f64 = 24.0;
@@ -65,12 +65,11 @@ pub struct Window {
     pub win: adw::ApplicationWindow,
     title: adw::WindowTitle,
     toasts: adw::ToastOverlay,
-    split: adw::OverlaySplitView,
     stack: gtk::Stack,
     scroller: gtk::ScrolledWindow,
     pages_box: gtk::Box,
     context_menu: gtk::PopoverMenu,
-    sb: Sidebar,
+    sb: Preferences,
     pages: RefCell<Vec<PageView>>,
     editor: RefCell<Option<Editor>>,
     prefs: RefCell<Prefs>,
@@ -113,6 +112,13 @@ impl Window {
             .action_name("win.open")
             .build();
         header.pack_start(&open);
+        header.pack_start(
+            &gtk::Button::builder()
+                .icon_name("document-save-symbolic")
+                .tooltip_text("Save (Ctrl+S)")
+                .action_name("win.save")
+                .build(),
+        );
         let nav = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         nav.add_css_class("linked");
         for (icon, tip, action) in [
@@ -161,6 +167,7 @@ impl Window {
             ("Reset All _Line Adjustments", "win.reset-lines"),
         ]);
         section(&[
+            ("_Preferences", "win.preferences"),
             ("_Keyboard Shortcuts", "win.shortcuts"),
             ("_About ChantEdit", "win.about"),
         ]);
@@ -176,14 +183,8 @@ impl Window {
             .action_name("win.export")
             .css_classes(["suggested-action"])
             .build();
-        let sidebar_button = gtk::ToggleButton::builder()
-            .icon_name("sidebar-show-symbolic")
-            .tooltip_text("Toggle Sidebar (F9)")
-            .active(true)
-            .build();
         header.pack_end(&menu_button);
         header.pack_end(&export);
-        header.pack_end(&sidebar_button);
 
         // Pages
         let pages_box = gtk::Box::builder()
@@ -200,6 +201,7 @@ impl Window {
             .hexpand(true)
             .vexpand(true)
             .css_classes(["chant-canvas"])
+            .focusable(true)
             .build();
         let context_menu = gtk::PopoverMenu::builder().has_arrow(true).build();
         context_menu.set_parent(&scroller);
@@ -221,22 +223,11 @@ impl Window {
         stack.add_named(&empty, Some("empty"));
         stack.add_named(&scroller, Some("doc"));
 
-        let sb = Sidebar::new();
+        let sb = Preferences::new();
         sb.guides.set_active(prefs.guides);
-        let split = adw::OverlaySplitView::builder()
-            .sidebar(&sb.root)
-            .content(&stack)
-            .min_sidebar_width(310.0)
-            .max_sidebar_width(360.0)
-            .build();
-        split
-            .bind_property("show-sidebar", &sidebar_button, "active")
-            .bidirectional()
-            .sync_create()
-            .build();
 
         let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&split));
+        toasts.set_child(Some(&stack));
         let view = adw::ToolbarView::new();
         view.add_top_bar(&header);
         view.set_content(Some(&toasts));
@@ -259,7 +250,6 @@ impl Window {
             win,
             title,
             toasts,
-            split,
             stack,
             scroller,
             pages_box,
@@ -326,8 +316,8 @@ impl Window {
     }
 
     fn refocus(&self) {
-        if self.editor.borrow().is_some() {
-            self.sb.entry.grab_focus();
+        if self.editor.borrow().is_some() && self.win.visible_dialog().is_none() {
+            self.scroller.grab_focus();
         }
     }
 
@@ -371,8 +361,9 @@ impl Window {
         add("toggle-guides", |w| {
             w.sb.guides.set_active(!w.sb.guides.is_active())
         });
-        add("toggle-sidebar", |w| {
-            w.split.set_show_sidebar(!w.split.shows_sidebar())
+        add("preferences", |w| {
+            w.edit(Editor::cancel_edit);
+            w.sb.dialog.present(Some(&w.win));
         });
         add("remove-line", |w| w.edit(Editor::remove_active_line));
         add("reset-lines", |w| w.edit(Editor::reset_lines));
@@ -543,21 +534,13 @@ impl Window {
             }
         });
 
-        // Sidebar
+        // Preferences
         let sb = &self.sb;
         let wk = weak.clone();
-        sb.entry.connect_entry_activated(move |_| {
+        sb.dialog.connect_closed(move |_| {
             if let Some(w) = wk.upgrade() {
-                w.edit(Editor::commit_entry);
+                w.refocus();
             }
-        });
-        let wk = weak.clone();
-        sb.entry.connect_changed(move |e| {
-            let Some(w) = wk.upgrade().filter(|w| !w.syncing.get()) else {
-                return;
-            };
-            let text = e.text().to_string();
-            w.edit(|ed| ed.pending = text);
         });
         let wk = weak.clone();
         sb.font.connect_font_desc_notify(move |b| {
@@ -566,7 +549,6 @@ impl Window {
             };
             desc.unset_fields(pango::FontMask::SIZE);
             w.update_settings(|s| s.font = desc.to_string());
-            w.refocus();
         });
         let wk = weak.clone();
         sb.size.connect_value_notify(move |r| {
@@ -596,6 +578,7 @@ impl Window {
         sb.guides.connect_active_notify(move |r| {
             if let Some(w) = wk.upgrade() {
                 w.prefs.borrow_mut().guides = r.is_active();
+                let _ = w.prefs.borrow().save();
                 w.queue_draw_pages();
             }
         });
@@ -610,7 +593,12 @@ impl Window {
         self: &Rc<Self>,
         f: impl FnOnce(Rc<Window>) -> F,
     ) {
-        glib::spawn_future_local(f(self.clone()));
+        let w = self.clone();
+        let future = f(w.clone());
+        glib::spawn_future_local(async move {
+            future.await;
+            w.refocus();
+        });
     }
 
     // -------------------------------------------------------------- editing
@@ -627,12 +615,6 @@ impl Window {
             match e {
                 Effect::Toast(m) => self.toast(&m),
                 Effect::Reveal { page, x, y } => self.reveal(page, x, y),
-                Effect::SetEntry(text) => {
-                    self.syncing.set(true);
-                    self.sb.entry.set_text(&text);
-                    self.sb.entry.set_position(-1);
-                    self.syncing.set(false);
-                }
             }
         }
         self.refresh();
@@ -662,7 +644,7 @@ impl Window {
         }
     }
 
-    fn sync_sidebar(&self) {
+    fn sync_preferences(&self) {
         let st = self.editor.borrow();
         let Some(ed) = st.as_ref() else { return };
         let s = &ed.doc.settings;
@@ -674,7 +656,6 @@ impl Window {
         self.sb.avoid.set_active(s.auto_avoid);
         self.sb.snap.set_active(s.snap_notes);
         self.sb.offset.set_value(s.line_offset);
-        self.sb.entry.set_text("");
         self.syncing.set(false);
     }
 
@@ -685,7 +666,6 @@ impl Window {
                 self.title.set_title("ChantEdit");
                 self.title.set_subtitle("");
                 self.win.set_title(Some("ChantEdit"));
-                self.sb.chord_group.set_description(None);
             }
             Some(ed) => {
                 let dot = if ed.is_dirty() { "• " } else { "" };
@@ -701,9 +681,6 @@ impl Window {
                     sub.push_str(" · finding chord lines…");
                 }
                 self.title.set_subtitle(&sub);
-                self.sb
-                    .chord_group
-                    .set_description(Some(&glib::markup_escape_text(&ed.status())));
             }
         }
         drop(st);
@@ -724,14 +701,16 @@ impl Window {
         let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
         let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
         let alt = state.contains(gdk::ModifierType::ALT_MASK);
-        if !self.sb.entry_focused(&self.win) {
+        if gtk::prelude::GtkWindowExt::focus(&self.win).is_none_or(|f| {
+            f != *self.scroller.upcast_ref::<gtk::Widget>() && !f.is_ancestor(&self.scroller)
+        }) || self.context_menu.is_visible()
+        {
             if key == K::Escape && !self.context_menu.is_visible() {
                 self.refocus();
                 return true;
             }
             return false;
         }
-        let empty = self.sb.entry.text().is_empty();
         let (editing, sel) = {
             let st = self.editor.borrow();
             let ed = st.as_ref().expect("document open");
@@ -744,9 +723,6 @@ impl Window {
         let step = f64::from(dir);
         match key {
             K::Left | K::Right | K::KP_Left | K::KP_Right => {
-                if !(empty || alt) {
-                    return false;
-                }
                 self.edit(|ed| match (ctrl, shift) {
                     (true, _) => ed.jump_note(dir),
                     (_, true) => ed.nudge(step * NUDGE_BIG),
@@ -758,17 +734,14 @@ impl Window {
                 (_, true) => ed.nudge_y(step * V_STEP),
                 _ => ed.change_line(dir),
             }),
-            K::Tab | K::KP_Tab if !ctrl => {
-                self.edit(|ed| ed.select_rel(if shift { -1 } else { 1 }))
-            }
-            K::ISO_Left_Tab if !ctrl => self.edit(|ed| ed.select_rel(-1)),
-            K::Delete | K::KP_Delete if empty && !ctrl => self.edit(|ed| ed.delete_selected(false)),
-            K::BackSpace if empty => self.edit(|ed| ed.delete_selected(true)),
+            K::Tab | K::KP_Tab if !ctrl => self.edit(|ed| ed.tab(if shift { -1 } else { 1 })),
+            K::ISO_Left_Tab if !ctrl => self.edit(|ed| ed.tab(-1)),
+            K::Return | K::KP_Enter if !ctrl => self.edit(Editor::cancel_edit),
+            K::Delete | K::KP_Delete if !ctrl => self.edit(|ed| ed.delete_selected(false)),
+            K::BackSpace if !ctrl => self.edit(Editor::backspace_text),
             K::Escape => {
                 if editing {
                     self.edit(Editor::cancel_edit);
-                } else if !empty {
-                    self.sb.entry.set_text("");
                 } else if sel.is_some() {
                     self.edit(Editor::deselect);
                 }
@@ -778,21 +751,25 @@ impl Window {
                     self.edit(|ed| ed.start_edit(id));
                 }
             }
-            K::Home if empty => self.edit(Editor::select_first),
-            K::End if empty => self.edit(Editor::select_last),
+            K::Home => self.edit(Editor::select_first),
+            K::End => self.edit(Editor::select_last),
             K::Page_Up | K::Page_Down if !alt => {
                 let vadj = self.scroller.vadjustment();
                 let step = vadj.page_size() * 0.85 * if key == K::Page_Up { -1.0 } else { 1.0 };
                 vadj.set_value(vadj.value() + step);
             }
-            K::z | K::Z if ctrl && empty => {
-                self.edit(if shift { Editor::redo } else { Editor::undo })
-            }
-            K::y | K::Y if ctrl && empty => self.edit(Editor::redo),
-            K::r | K::R if ctrl && empty => {
+            K::z | K::Z if ctrl => self.edit(if shift { Editor::redo } else { Editor::undo }),
+            K::y | K::Y if ctrl => self.edit(Editor::redo),
+            K::r | K::R if ctrl => {
                 if let Some(id) = sel {
                     self.edit(|ed| ed.reset_chord_y(id));
                 }
+            }
+            _ if !ctrl && !alt => {
+                let Some(ch) = key.to_unicode().filter(|c| !c.is_control()) else {
+                    return false;
+                };
+                self.edit(|ed| ed.type_text(&ch.to_string()));
             }
             _ => return false,
         }
@@ -988,30 +965,12 @@ impl Window {
                 path.add_rounded_rect(&gsk::RoundedRect::from_rect(rect, 2.0));
                 let path = path.to_path();
                 snap.append_fill(&path, gsk::FillRule::Winding, &alpha(&accent, 0.25));
-                let width = if ed.editing { 2.0 } else { 1.0 };
-                snap.append_stroke(&path, &gsk::Stroke::new(width / z), &alpha(&accent, 0.9));
+                snap.append_stroke(&path, &gsk::Stroke::new(1.0 / z), &alpha(&accent, 0.9));
             }
             draw_text(snap, &ed.font, &c.text, c.x, p.baseline, &gdk::RGBA::BLACK);
         }
 
-        let previews = ed.previews();
-        if !previews.is_empty() {
-            let a = ed.analyses.get(page).and_then(|a| a.as_deref());
-            for pv in previews.iter().filter(|p| p.line.page == page) {
-                let line = ed.layout.line(pv.line);
-                let text = ed.font.text(&pv.text);
-                let (baseline, _, _) =
-                    layout::place(&text, pv.x, None, line, &ed.font, a, &ed.doc.settings);
-                draw_text(
-                    snap,
-                    &ed.font,
-                    &pv.text,
-                    pv.x,
-                    baseline,
-                    &alpha(&accent, 0.7),
-                );
-            }
-        } else if let (None, Some(cur), Some(r)) = (ed.sel, ed.cursor, ed.cursor_line())
+        if let (Some(cur), Some(r)) = (ed.cursor, ed.cursor_line())
             && r.page == page
         {
             let y = ed.layout.line(r).y;
@@ -1349,7 +1308,7 @@ impl Window {
             .replace(Some(Editor::new(doc, doc_path, source, sizes.clone())));
 
         self.build_pages(&sizes);
-        self.sync_sidebar();
+        self.sync_preferences();
         self.set_document_open(true);
         self.fit_pending.set(self.prefs.borrow().zoom.is_none());
         self.scroller.vadjustment().set_value(0.0);
@@ -1723,8 +1682,8 @@ impl Window {
                 .collect()
         };
         match name {
-            "type" => self.sb.entry.set_text(arg),
-            "enter" => self.edit(Editor::commit_entry),
+            "type" => self.edit(|ed| ed.type_text(arg)),
+            "enter" => self.edit(Editor::cancel_edit),
             "key" => {
                 let mut parts = arg.split('+');
                 let key =
@@ -1914,7 +1873,13 @@ mod tests {
         while context.pending() {
             context.iteration(false);
         }
-        assert!(w.sb.entry_focused(&w.win));
+        assert!(
+            gtk::prelude::GtkWindowExt::focus(&w.win).is_some_and(|f| {
+                f == *w.scroller.upcast_ref::<gtk::Widget>() || f.is_ancestor(&w.scroller)
+            }),
+            "score focus: {:?}",
+            gtk::prelude::GtkWindowExt::focus(&w.win)
+        );
 
         let controllers = w.win.observe_controllers();
         let key = (0..controllers.n_items())
@@ -1927,19 +1892,32 @@ mod tests {
         let press = |k: gdk::Key| {
             key.emit_by_name::<bool>("key-pressed", &[&k, &0u32, &gdk::ModifierType::empty()])
         };
-        // Ordinary typing and Enter must reach the entry; editor navigation
-        // must stop here, rather than also navigating GTK widgets.
-        assert!(!press(gdk::Key::C));
-        assert!(!press(gdk::Key::Return));
         w.edit(|ed| ed.add_line_at(0, 100.0));
-        w.sb.entry.set_text("C F Dm");
-        w.sb.entry.emit_by_name::<()>("entry-activated", &[]);
+        assert!(press(gdk::Key::C));
+        assert_eq!(
+            w.editor.borrow().as_ref().unwrap().selected().unwrap().text,
+            "C"
+        );
+        assert!(press(gdk::Key::Return));
         assert_eq!(
             w.editor.borrow().as_ref().unwrap().doc.edits.chords.len(),
-            3
+            1
         );
-        assert!(w.sb.entry.text().is_empty());
+        assert!(press(gdk::Key::Tab));
         assert!(press(gdk::Key::Left));
+
+        w.win.lookup_action("preferences").unwrap().activate(None);
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert!(w.win.visible_dialog().is_some());
+        assert!(!press(gdk::Key::Tab));
+        w.sb.dialog.close();
+        while context.pending() {
+            context.iteration(false);
+        }
+        // Closing preferences must restore score navigation.
+        assert!(press(gdk::Key::Tab));
 
         // A dirty close must stop GTK's default destruction, then allow Cancel.
         assert!(w.win.emit_by_name::<bool>("close-request", &[]));

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::document::Settings;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
     /// Applied to documents created from a PDF.
@@ -17,18 +17,6 @@ pub struct Prefs {
     pub export_dir: Option<PathBuf>,
     pub zoom: Option<f64>,
     pub guides: bool,
-}
-
-impl Default for Prefs {
-    fn default() -> Self {
-        Prefs {
-            defaults: Settings::default(),
-            last_dir: None,
-            export_dir: None,
-            zoom: None,
-            guides: true,
-        }
-    }
 }
 
 fn path() -> PathBuf {

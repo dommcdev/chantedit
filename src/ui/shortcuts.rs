@@ -19,13 +19,17 @@ const SECTIONS: &[(&str, &[Item])] = &[
         "Adding Chords",
         &[
             item(
-                "Add Typed Chord",
+                "Finish Chord",
                 "Return",
-                "Type several separated by spaces to add them on consecutive notes",
+                "Type on the score to add or replace a chord; changes appear immediately",
             ),
-            item("Edit Selected Chord", "F2", "Or double-click the chord"),
+            item(
+                "Continue Editing Chord",
+                "F2",
+                "Typing directly replaces the selected chord",
+            ),
             item("Delete Selected Chord", "BackSpace Delete", ""),
-            item("Cancel Edit / Deselect", "Escape", ""),
+            item("Finish Typing / Deselect", "Escape", ""),
             item("Undo", "<Control>z", ""),
             item("Redo", "<Control><Shift>z <Control>y", ""),
         ],
@@ -52,7 +56,11 @@ const SECTIONS: &[(&str, &[Item])] = &[
     (
         "Selecting",
         &[
-            item("Select Next / Previous Chord", "Tab <Shift>Tab", ""),
+            item(
+                "Next / Previous Note or Chord",
+                "Tab <Shift>Tab",
+                "Finishes typing and moves to the next position",
+            ),
             item("Select First / Last Chord", "Home End", ""),
             item("Scroll Page", "Page_Up Page_Down", ""),
         ],
@@ -94,7 +102,7 @@ const SECTIONS: &[(&str, &[Item])] = &[
                 "Or Ctrl+scroll",
             ),
             item("Fit Page Width", "<Control>0", ""),
-            item("Toggle Sidebar", "F9", ""),
+            item("Preferences", "<Control>comma", ""),
             item("Keyboard Shortcuts", "F1 <Control>question", ""),
         ],
     ),

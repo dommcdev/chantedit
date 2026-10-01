@@ -3,9 +3,9 @@
 mod editor;
 mod files;
 mod page;
+mod preferences;
 mod render;
 mod shortcuts;
-mod sidebar;
 mod window;
 
 use std::cell::RefCell;
@@ -36,7 +36,7 @@ const ACCELS: &[(&str, &[&str])] = &[
     ("win.zoom-out", &["<Control>minus", "<Control>KP_Subtract"]),
     ("win.zoom-fit", &["<Control>0"]),
     ("win.toggle-guides", &["<Control>g"]),
-    ("win.toggle-sidebar", &["F9"]),
+    ("win.preferences", &["<Control>comma"]),
     ("win.remove-line", &["<Control><Shift>Delete"]),
     ("win.shortcuts", &["F1", "<Control>question"]),
     ("app.quit", &["<Control>q"]),

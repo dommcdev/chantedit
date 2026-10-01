@@ -29,20 +29,12 @@ pub enum Effect {
         x: f64,
         y: f64,
     },
-    /// Replace the chord entry's text.
-    SetEntry(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cursor {
     pub anchor: Anchor,
     pub x: f64,
-}
-
-pub struct Preview {
-    pub line: LineRef,
-    pub x: f64,
-    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +87,7 @@ pub struct Editor {
     pub sel: Option<u32>,
     pub editing: bool,
     pub cursor: Option<Cursor>,
-    /// Text in the chord entry.
+    /// Text accumulated during the current on-page typing session.
     pub pending: String,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
@@ -155,6 +147,7 @@ impl Editor {
     }
 
     pub fn mark_saved(&mut self, path: PathBuf) {
+        self.cancel_edit();
         self.path = Some(path);
         self.saved = (self.doc.edits.clone(), self.doc.settings.clone());
         // A subsequent nudge must undo back to this saved state, even if it
@@ -375,6 +368,7 @@ impl Editor {
     // ------------------------------------------------------ selection/cursor
 
     pub fn select_chord(&mut self, id: u32, reveal: bool) {
+        self.cancel_edit();
         let Some(c) = self.doc.edits.chord(id) else {
             return;
         };
@@ -382,9 +376,6 @@ impl Editor {
             anchor: c.anchor,
             x: c.x,
         };
-        if self.editing && self.sel != Some(id) {
-            self.cancel_edit();
-        }
         self.sel = Some(id);
         self.cursor = Some(cursor);
         if reveal && let Some(p) = self.placed(id) {
@@ -404,10 +395,11 @@ impl Editor {
             });
         }
         self.sel = None;
-        self.editing = false;
+        self.cancel_edit();
     }
 
     pub fn place_cursor(&mut self, page: usize, x: f64, y: f64) {
+        self.cancel_edit();
         self.sel = None;
         let Some(r) = self.layout.nearest_line(page, y) else {
             self.cursor = None;
@@ -428,6 +420,12 @@ impl Editor {
             anchor: line.anchor,
             x,
         });
+        if let Some(id) = self.doc.edits.chords.iter().find_map(|c| {
+            (self.placed(c.id).is_some_and(|p| p.line == r) && (c.x - x).abs() <= 0.75)
+                .then_some(c.id)
+        }) {
+            self.select_chord(id, false);
+        }
     }
 
     fn cursor_to_start(&mut self) -> bool {
@@ -443,146 +441,162 @@ impl Editor {
         true
     }
 
-    // ------------------------------------------------------------ inserting
-
-    /// Where a chord goes after one (or the bare cursor, `prev = None`) at `x`.
-    fn next_position(&self, r: LineRef, x: f64, prev: Option<&str>, text: &str) -> (LineRef, f64) {
-        let Some(prev) = prev else { return (r, x) };
-        let snap = self.doc.settings.snap_notes;
-        let w = self.font.text(text).metrics.width;
-        let pw = self.font.text(prev).metrics.width;
-        let line = self.line(r);
-        let need = x + pw / 2.0 + self.font.size() * 0.4 + w / 2.0;
-        let nx = if snap {
-            line.next_note(need - 0.01, 1, 0.0).unwrap_or(need)
-        } else {
-            need
-        };
-        if nx + w / 2.0 > line.x1 + self.font.size()
-            && let Some(next) = self.layout.adjacent(r, 1)
-        {
-            let l = self.line(next);
-            let x0 = l.x0 + w / 2.0;
-            let x0 = if snap {
-                l.next_note(l.x0 + w / 4.0, 1, 0.0).unwrap_or(x0)
-            } else {
-                x0
-            };
-            return (next, x0);
-        }
-        (r, nx)
-    }
-
-    /// Where the space-separated chords typed in the entry would go.
-    pub fn previews(&self) -> Vec<Preview> {
-        let input = self.pending.trim();
-        if input.is_empty() || self.editing {
-            return Vec::new();
-        }
-        let start = match self.selected() {
-            Some(c) => self
-                .placed(c.id)
-                .map(|p| (p.line, c.x, Some(c.text.as_str()))),
-            None => self
-                .cursor
-                .and_then(|cur| Some((self.layout.resolve(&cur.anchor)?, cur.x, None))),
-        };
-        let Some((mut r, mut x, mut prev)) = start else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for t in input.split_whitespace() {
-            (r, x) = self.next_position(r, x, prev, t);
-            out.push(Preview {
-                line: r,
-                x,
-                text: t.to_owned(),
-            });
-            prev = Some(t);
-        }
-        out
-    }
-
-    /// Enter in the chord entry.
-    pub fn commit_entry(&mut self) {
-        let text = self
-            .pending
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.is_empty() {
-            if let (Some(id), false) = (self.sel, self.editing) {
-                self.start_edit(id);
-            }
-            return;
-        }
-        if self.editing {
-            if let Some(id) = self.sel {
-                self.push_undo(Op::Edit, Some(id));
-                if let Some(c) = self.doc.edits.chord_mut(id) {
-                    c.text = text;
-                }
-            }
-            self.editing = false;
-            self.set_entry("");
-            self.relayout();
-            return;
-        }
-        let previews = self.previews();
-        let Some(last) = previews.last() else {
-            self.toast("Click on the score to choose where the chord goes");
-            return;
-        };
-        let (last_line, last_x) = (last.line, last.x);
-        self.push_undo(Op::Insert, None);
-        for p in previews {
-            let id = self.doc.edits.new_id();
-            let anchor = self.line(p.line).anchor;
-            self.doc.edits.chords.push(Chord {
-                id,
-                anchor,
-                x: p.x,
-                text: p.text,
-                dy: None,
-            });
-            self.sel = Some(id);
-        }
-        self.cursor = Some(Cursor {
-            anchor: self.line(last_line).anchor,
-            x: last_x,
-        });
-        self.set_entry("");
-        self.relayout();
-        let y = self.line(last_line).y;
-        self.effects.push(Effect::Reveal {
-            page: last_line.page,
-            x: last_x,
-            y,
-        });
-    }
-
-    fn set_entry(&mut self, text: &str) {
-        self.pending = text.to_owned();
-        self.effects.push(Effect::SetEntry(text.to_owned()));
-    }
-
     pub fn start_edit(&mut self, id: u32) {
         let Some(text) = self.doc.edits.chord(id).map(|c| c.text.clone()) else {
             return;
         };
         self.select_chord(id, false);
+        self.push_undo(Op::Edit, Some(id));
         self.editing = true;
-        self.set_entry(&text);
+        self.pending = text;
     }
 
     pub fn cancel_edit(&mut self) {
+        // Text is already applied; ending a typing session only clears its buffer.
         self.editing = false;
-        self.set_entry("");
+        self.pending.clear();
     }
 
     // -------------------------------------------------------------- editing
 
+    /// Typing replaces a selected chord on the first keystroke, then appends.
+    /// The document and its layout update immediately, including before Save.
+    pub fn type_text(&mut self, text: &str) {
+        if !self.editing {
+            if let Some(id) = self.sel {
+                self.push_undo(Op::Edit, Some(id));
+            } else {
+                let Some(cur) = self.cursor.filter(|_| self.cursor_line().is_some()) else {
+                    self.toast("Click on the score to choose where the chord goes");
+                    return;
+                };
+                self.push_undo(Op::Insert, None);
+                let id = self.doc.edits.new_id();
+                self.doc.edits.chords.push(Chord {
+                    id,
+                    anchor: cur.anchor,
+                    x: cur.x,
+                    text: String::new(),
+                    dy: None,
+                });
+                self.sel = Some(id);
+            }
+            self.pending.clear();
+            self.editing = true;
+        }
+        self.pending.extend(text.chars().map(|ch| match ch {
+            '#' => '♯',
+            'b' => '♭',
+            _ => ch,
+        }));
+        if let Some(c) = self.sel.and_then(|id| self.doc.edits.chord_mut(id)) {
+            c.text = self.pending.clone();
+        }
+        self.relayout();
+    }
+
+    pub fn backspace_text(&mut self) {
+        if !self.editing {
+            self.delete_selected(true);
+            return;
+        }
+        self.pending.pop();
+        if self.pending.is_empty() {
+            if let Some(id) = self.sel.take() {
+                self.doc.edits.chords.retain(|c| c.id != id);
+            }
+            self.cancel_edit();
+        } else if let Some(c) = self.sel.and_then(|id| self.doc.edits.chord_mut(id)) {
+            c.text = self.pending.clone();
+        }
+        self.relayout();
+    }
+
+    /// Visit note positions and existing chords in score reading order. A chord
+    /// occupying a note replaces that note's stop, so Tab never selects it twice.
+    pub fn tab(&mut self, dir: i32) {
+        self.cancel_edit();
+        let mut stops = Vec::new();
+        for r in self.layout.all_lines() {
+            let line = self.line(r);
+            let chords: Vec<_> = self
+                .doc
+                .edits
+                .chords
+                .iter()
+                .filter(|c| self.placed(c.id).is_some_and(|p| p.line == r))
+                .collect();
+            for &x in line.notes.iter() {
+                if !chords.iter().any(|c| (c.x - x).abs() <= 0.75) {
+                    stops.push((r, x, None));
+                }
+            }
+            for c in chords {
+                stops.push((r, c.x, Some(c.id)));
+            }
+            if line.notes.is_empty() && !stops.iter().any(|(s, _, _)| *s == r) {
+                stops.push((r, line.x0 + 20.0, None));
+            }
+        }
+        stops.sort_by(|a, b| {
+            a.0.page
+                .cmp(&b.0.page)
+                .then(a.0.index.cmp(&b.0.index))
+                .then(a.1.total_cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+        });
+        let current = self.active_line().zip(self.cursor.map(|c| c.x));
+        let exact = stops.iter().position(|(r, x, id)| {
+            if let Some(sel) = self.sel {
+                *id == Some(sel)
+            } else {
+                current.is_some_and(|(cr, cx)| cr == *r && (cx - x).abs() <= 0.75)
+            }
+        });
+        let target = if let Some(i) = exact {
+            let next = i as isize + dir as isize;
+            usize::try_from(next).ok().and_then(|j| stops.get(j))
+        } else {
+            let beyond = |&&(r, x, _): &&(LineRef, f64, Option<u32>)| {
+                current.is_none_or(|(cr, cx)| {
+                    let order = r
+                        .page
+                        .cmp(&cr.page)
+                        .then(r.index.cmp(&cr.index))
+                        .then(x.total_cmp(&cx));
+                    if dir > 0 {
+                        order.is_gt()
+                    } else {
+                        order.is_lt()
+                    }
+                })
+            };
+            if dir > 0 {
+                stops.iter().find(beyond)
+            } else {
+                stops.iter().rev().find(beyond)
+            }
+        }
+        .copied();
+        if let Some((r, x, id)) = target {
+            self.sel = None;
+            self.cursor = Some(Cursor {
+                anchor: self.line(r).anchor,
+                x,
+            });
+            if let Some(id) = id {
+                self.select_chord(id, false);
+            }
+            self.effects.push(Effect::Reveal {
+                page: r.page,
+                x,
+                y: self.line(r).y,
+            });
+        }
+    }
+
     pub fn nudge(&mut self, dx: f64) {
+        self.cancel_edit();
         if let Some(id) = self.sel {
             let Some(r) = self.placed(id).map(|p| p.line) else {
                 return;
@@ -625,6 +639,7 @@ impl Editor {
     }
 
     fn move_to(&mut self, r: LineRef, x: f64) {
+        self.cancel_edit();
         let anchor = self.line(r).anchor;
         if let Some(id) = self.sel {
             self.push_undo(Op::Nudge, Some(id));
@@ -659,6 +674,7 @@ impl Editor {
 
     /// Raises or lowers only the selected chord.
     pub fn nudge_y(&mut self, d: f64) {
+        self.cancel_edit();
         let Some(id) = self.sel else { return };
         let Some(dy) = self.placed(id).map(|p| p.dy) else {
             return;
@@ -682,6 +698,7 @@ impl Editor {
 
     /// Raises or lowers the whole active line.
     pub fn adjust_line(&mut self, d: f64) {
+        self.cancel_edit();
         let Some(r) = self.active_line() else { return };
         let line = self.line(r).clone();
         self.push_undo(Op::AdjustLine, Some(r.page as u32 * 1000 + r.index as u32));
@@ -854,19 +871,6 @@ impl Editor {
         }
     }
 
-    pub fn select_rel(&mut self, dir: i32) {
-        let ids = self.sorted_chords();
-        let idx = self.sel.and_then(|s| ids.iter().position(|&id| id == s));
-        let j = match idx {
-            Some(i) => i as isize + dir as isize,
-            None if dir > 0 => 0,
-            None => ids.len() as isize - 1,
-        };
-        if let Some(&id) = usize::try_from(j).ok().and_then(|j| ids.get(j)) {
-            self.select_chord(id, true);
-        }
-    }
-
     pub fn select_first(&mut self) {
         if let Some(&id) = self.sorted_chords().first() {
             self.select_chord(id, true);
@@ -987,40 +991,6 @@ impl Editor {
 
     // --------------------------------------------------------------- output
 
-    /// One-line status for the sidebar.
-    pub fn status(&self) -> String {
-        let where_ = |r: Option<LineRef>| match r {
-            Some(r) => format!("page {}, line {}", r.page + 1, r.index + 1),
-            None => "no line".to_owned(),
-        };
-        match (self.selected(), self.cursor) {
-            (Some(c), _) if self.editing => {
-                format!("Editing “{}”: Enter to apply, Esc to cancel", c.text)
-            }
-            (Some(c), _) => {
-                let tweak = if c.dy.is_some() {
-                    " · height tweaked"
-                } else {
-                    ""
-                };
-                let r = self.placed(c.id).map(|p| p.line);
-                format!(
-                    "“{}” selected · {}{tweak}\nNext chord goes after it. Arrows move it.",
-                    c.text,
-                    where_(r)
-                )
-            }
-            (None, Some(_)) => {
-                format!(
-                    "Cursor on {}. Type a chord and press Enter.",
-                    where_(self.cursor_line())
-                )
-            }
-            (None, None) if !self.analysis_done() => "Finding chord lines…".to_owned(),
-            (None, None) => "Click on the score where the first chord goes.".to_owned(),
-        }
-    }
-
     pub fn export_pages(&self) -> Vec<PageItems> {
         let mut pages: Vec<PageItems> = self
             .page_sizes
@@ -1057,16 +1027,111 @@ mod tests {
     }
 
     fn insert(ed: &mut Editor, text: &str) {
-        ed.pending = text.into();
-        ed.commit_entry();
+        ed.type_text(text);
+        ed.cancel_edit();
+    }
+
+    fn score_editor() -> Editor {
+        let mut gray = vec![255; 600 * 800];
+        for top in [150, 300] {
+            for y in (top..=top + 18).step_by(6) {
+                gray[y * 600 + 40..y * 600 + 560].fill(0);
+            }
+        }
+        let mut page = analysis::Page::analyze(&gray, 600, 800, 600.0, 800.0);
+        assert_eq!(page.staves.len(), 2);
+        for staff in &mut page.staves {
+            staff.notes = Arc::from([80.0, 120.0, 160.0]);
+        }
+        let doc = Document::new(Vec::new(), "score.pdf".into(), Settings::default());
+        let mut ed = Editor::new(doc, None, None, vec![(600.0, 800.0); 2]);
+        let page = Arc::new(page);
+        ed.set_analysis(0, page.clone());
+        ed.set_analysis(1, page);
+        ed
+    }
+
+    #[test]
+    fn live_typing_replaces_selected_text_and_exports_before_enter() {
+        let mut ed = score_editor();
+        ed.type_text("D");
+        ed.type_text("m");
+        let id = ed.sel.unwrap();
+        assert_eq!(ed.export_pages()[0].items[0].text, "Dm");
+        let width = ed.placed(id).unwrap().bounds.x1 - ed.placed(id).unwrap().bounds.x0;
+        ed.select_chord(id, false);
+        ed.type_text("F");
+        ed.type_text("#7");
+        assert_eq!(ed.selected().unwrap().text, "F♯7");
+        assert_ne!(
+            ed.placed(id).unwrap().bounds.x1 - ed.placed(id).unwrap().bounds.x0,
+            width
+        );
+        ed.undo();
+        assert_eq!(ed.selected().unwrap().text, "Dm");
+        ed.redo();
+        assert_eq!(ed.selected().unwrap().text, "F♯7");
+    }
+
+    #[test]
+    fn tab_visits_notes_and_chords_once_across_lines_and_pages() {
+        let mut ed = score_editor();
+        assert_eq!(ed.cursor.unwrap().x, 80.0);
+        ed.type_text("C");
+        let first = ed.sel.unwrap();
+        ed.tab(1);
+        assert_eq!(ed.cursor.unwrap().x, 120.0);
+        assert!(ed.sel.is_none());
+        assert!(!ed.editing);
+        ed.type_text("Am");
+        let second = ed.sel.unwrap();
+        ed.tab(-1);
+        assert_eq!(ed.sel, Some(first));
+        ed.tab(1);
+        assert_eq!(ed.sel, Some(second));
+        ed.tab(1);
+        assert!(ed.sel.is_none());
+        assert_eq!(ed.cursor.unwrap().x, 160.0);
+        ed.tab(1);
+        assert_eq!(ed.cursor_line(), Some(LineRef { page: 0, index: 1 }));
+        assert_eq!(ed.cursor.unwrap().x, 80.0);
+        ed.tab(1);
+        ed.tab(1);
+        ed.tab(1);
+        assert_eq!(ed.cursor_line(), Some(LineRef { page: 1, index: 0 }));
+        ed.tab(-1);
+        assert_eq!(ed.cursor_line(), Some(LineRef { page: 0, index: 1 }));
+        assert_eq!(ed.cursor.unwrap().x, 160.0);
+    }
+
+    #[test]
+    fn moved_chord_remains_a_tab_stop_and_backspace_updates_live() {
+        let mut ed = score_editor();
+        ed.type_text("Dm");
+        let id = ed.sel.unwrap();
+        ed.nudge(15.0);
+        ed.tab(-1);
+        assert!(ed.sel.is_none());
+        assert_eq!(ed.cursor.unwrap().x, 80.0);
+        ed.tab(1);
+        assert_eq!(ed.sel, Some(id));
+        ed.type_text("Bb");
+        assert_eq!(ed.export_pages()[0].items[0].text, "B♭");
+        ed.backspace_text();
+        assert_eq!(ed.export_pages()[0].items[0].text, "B");
+        ed.backspace_text();
+        assert!(ed.doc.edits.chords.is_empty());
+        assert_eq!(ed.cursor.unwrap().x, 95.0);
+        ed.undo();
+        assert_eq!(ed.selected().unwrap().text, "Dm");
     }
 
     #[test]
     fn insert_undo_restores_insertion_point_and_redo_selection() {
         let mut ed = editor();
         let cursor = ed.cursor;
-        insert(&mut ed, "C F Dm");
-        assert_eq!(ed.doc.edits.chords.len(), 3);
+        insert(&mut ed, "Dm");
+        assert_eq!(ed.doc.edits.chords.len(), 1);
         let chords = ed.doc.edits.chords.clone();
         let selection = ed.sel;
         ed.undo();
@@ -1096,7 +1161,7 @@ mod tests {
             0,
             Arc::new(analysis::Page::analyze(&[255; 100], 10, 10, 600.0, 800.0)),
         );
-        insert(&mut ed, "C Dm");
+        insert(&mut ed, "Dm");
         let chords = ed.doc.edits.chords.clone();
         ed.reset_lines();
         assert_eq!(ed.doc.edits.chords, chords);
@@ -1104,7 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn removing_edited_chord_clears_entry() {
+    fn removing_edited_chord_finishes_typing() {
         for operation in [
             Editor::remove_active_line,
             |ed: &mut Editor| ed.delete_selected(false),
@@ -1117,11 +1182,6 @@ mod tests {
             operation(&mut ed);
             assert!(!ed.editing);
             assert!(ed.pending.is_empty());
-            assert!(
-                ed.take_effects()
-                    .iter()
-                    .any(|e| matches!(e, Effect::SetEntry(t) if t.is_empty()))
-            );
         }
     }
 
@@ -1149,11 +1209,37 @@ mod tests {
     }
 
     #[test]
+    fn saving_live_text_starts_a_new_undo_step() {
+        let mut ed = score_editor();
+        ed.type_text("C");
+        ed.mark_saved("test.ce".into());
+        assert!(!ed.is_dirty());
+        ed.type_text("Dm");
+        assert!(ed.is_dirty());
+        ed.undo();
+        assert_eq!(ed.selected().unwrap().text, "C");
+        assert!(!ed.is_dirty());
+    }
+
+    #[test]
+    fn clicking_an_occupied_note_edits_its_chord() {
+        let mut ed = score_editor();
+        ed.type_text("C");
+        let id = ed.sel.unwrap();
+        let y = ed.layout.line(ed.active_line().unwrap()).y;
+        ed.place_cursor(0, 80.0, y);
+        assert_eq!(ed.sel, Some(id));
+        ed.type_text("Dm");
+        assert_eq!(ed.doc.edits.chords.len(), 1);
+        assert_eq!(ed.selected().unwrap().text, "Dm");
+    }
+
+    #[test]
     fn clicking_page_without_lines_does_not_insert_on_previous_page() {
         let mut ed = editor();
         ed.place_cursor(1, 100.0, 100.0);
         insert(&mut ed, "C");
         assert!(ed.doc.edits.chords.is_empty());
-        assert_eq!(ed.pending, "C");
+        assert!(ed.pending.is_empty());
     }
 }

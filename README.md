@@ -24,11 +24,13 @@ launcher. It installs into `~/.local`, without needing `sudo`.
 ## Use
 
 1. **Open a score** with **Ctrl+O**. ChantEdit finds the chord lines automatically.
-2. **Add chords** in the sidebar box and press **Enter**. Type one chord or several
-   separated by spaces, such as `C F Dm`. New chords go after the selected chord.
+2. **Add chords** directly on the score. Click a note position and type a chord;
+   the text updates as you type. **Tab** finishes it and selects the next note
+   or chord; **Shift+Tab** goes backwards. Typing on a selected chord replaces it.
 3. **Adjust placement** by clicking the score to choose a starting point, or
-   dragging a chord. With the input box empty, the arrow keys move the selected
-   chord. Double-click a chord to edit its name; **Backspace** deletes it.
+   dragging a chord. Arrow keys move the selected chord, **Shift+Left/Right**
+   move in bigger steps, and **Ctrl+Left/Right** jump it to a note. **Backspace**
+   removes the last typed character, or deletes a chord when you aren't typing.
 4. **Save** with **Ctrl+S** to keep editing later, or **export a PDF** with
    **Ctrl+E** to print or share.
 
@@ -37,7 +39,8 @@ to continue editing, even if the original PDF moves. Opening a PDF with a saved
 `.ce` beside it resumes that saved work. Export creates a separate
 `Name (chords).pdf`; your original PDF stays untouched.
 
-Use the sidebar to change the chord font and size. If a chord line is missing,
+Use **Preferences** in the main menu (**Ctrl+,**) to change the chord font, size,
+and placement options. Guide lines are optional and off by default. If a chord line is missing,
 **Ctrl+click** the score to add one. Press **F1** for all keyboard shortcuts.
 
 ## Develop locally
