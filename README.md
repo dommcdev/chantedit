@@ -43,6 +43,38 @@ Use **Preferences** in the main menu (**Ctrl+,**) to change the chord font, size
 and placement options. Guide lines are optional and off by default. If a chord line is missing,
 **Ctrl+click** the score to add one. Press **F1** for all keyboard shortcuts.
 
+## Programmatic use (headless)
+
+These commands do not open a window or require a display:
+
+```sh
+chantedit --json score.pdf > score.json
+chantedit --apply chords.json score.pdf --output annotated.pdf --save annotated.ce
+# Read the same request from stdin with --apply -.
+```
+
+`--json` returns a version-1 object with `pages` (size and staff bounds) and
+`notes` in reading order. A note contains `index`, `page`, `staff`, and `x`.
+All indices are zero-based; coordinates are PDF points from the top left.
+These are detected **note/neume columns**, not individual pitches: a neume may
+contain several sung notes, and detection can miss columns.
+
+The import format is:
+
+```json
+{"version":1,"chords":[{"page":0,"staff":0,"x":120.5,"text":"C Dm"}]}
+```
+
+Imports add to existing chords when the input is a `.ce` document. They use
+the editor's normal layout/ink avoidance and export without rasterizing the
+original PDF. On pages with no detected staff, `staff: 0` creates a manual
+line near the top. `--output` and `--save` can be used independently. Open the
+saved `.ce` to adjust placements; the original score is never overwritten.
+Add `--spread` to wrap overly long imports and stagger colliding chord strings
+into rows above their anchors. Dense rows may encroach on titles/other score
+content and still need manual adjustment; no labels are discarded.
+JSON goes to stdout; errors go to stderr with a nonzero exit code.
+
 ## Develop locally
 
 The app uses Rust, GTK 4, and libadwaita. With the requirements above installed:
