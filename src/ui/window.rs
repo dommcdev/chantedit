@@ -99,9 +99,17 @@ impl Window {
             .hexpand(true)
             .vexpand(true)
             .build();
+        scroller.add_css_class("chant-score");
+        let score_style = gtk::CssProvider::new();
+        score_style.load_from_string(".chant-score { background-color: white; }");
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&scroller),
+            &score_style,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
         let empty = adw::StatusPage::builder()
             .icon_name("folder-music-symbolic")
-            .title("Open a Gregorian Chant")
+            .title("Open a Gregorian Chant Score")
             .description("Open a .gabc file, click a neume, and type a chord.")
             .child(
                 &gtk::Button::builder()
@@ -387,8 +395,6 @@ impl Window {
             .unwrap_or_else(|| ed.doc.name.clone());
         let title = format!("{}{}", if ed.doc.is_dirty() { "• " } else { "" }, filename);
         self.title.set_title(&title);
-        self.title
-            .set_subtitle("GABC · click a neume and type · Ctrl+arrows fine-tune placement");
         self.win.set_title(Some(&format!("{title} — ChantEdit")));
         let mut padding = self.padding.borrow_mut();
         for (page, view) in self.pages.borrow().iter().enumerate() {
@@ -644,6 +650,7 @@ impl Window {
         })
         .await;
         self.loading.set(false);
+        self.title.set_subtitle("");
         let result = result.unwrap_or_else(|_| Err("Chant renderer crashed".into()));
         match result {
             Ok((doc, preview)) => {

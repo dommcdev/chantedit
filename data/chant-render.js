@@ -34,9 +34,13 @@ function renderChant(source, targets, width) {
   const wanted = new Map(targets.map((offset, index) => [offset, index]));
   for (const line of score.lines) {
     const page = pages.length;
-    const top = line.bounds.y + line.notationBounds.y - 64;
+    const chordY = Math.min(-ctxt.staffInterval * 3 - 16, line.notationBounds.y - 12);
+    // Crop to the actual staff/lyric bounds and reserve one chord row.
+    // Raised chords get additional top padding from the editor as needed.
+    const contentTop = Math.min(line.notationBounds.y, chordY - 12) - 8;
+    const top = line.bounds.y + contentTop;
     const baseline = line.bounds.y - top;
-    const height = line.bounds.height + 88;
+    const height = line.notationBounds.y + line.notationBounds.height + 8 - contentTop;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}"><defs>${defs}</defs><g transform="translate(16,0)">${line.createSvgFragment(ctxt, top)}</g></svg>`;
     pages.push({svg, width, height});
     for (let i = line.notationsStartIndex; i < line.notationsStartIndex + line.numNotationsOnLine; i++) {
@@ -47,7 +51,7 @@ function renderChant(source, targets, width) {
         mapped.add(index);
         positions.push({index, page,
           x: 16 + notation.bounds.x + note.bounds.x,
-          y: baseline + Math.min(-ctxt.staffInterval * 3 - 16, line.notationBounds.y - 12),
+          y: baseline + chordY,
           note_y: baseline + note.bounds.y});
       }
     }
