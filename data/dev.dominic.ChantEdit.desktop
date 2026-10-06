@@ -6,5 +6,5 @@ Exec=chantedit %f
 Icon=folder-music
 Terminal=false
 Categories=AudioVideo;Audio;Music;Office;
-MimeType=application/x-chantedit;application/pdf;
+MimeType=text/x-gabc;
 StartupNotify=true

@@ -1,11 +1,7 @@
-//! Core of ChantEdit: score analysis, chord layout, the `.ce` document format
-//! and PDF export. The GTK front end lives in the `chantedit` binary.
+//! Source-anchored GABC chord editing and lightweight offline chant preview.
 
-pub mod analysis;
-pub mod automation;
-pub mod document;
-pub mod export;
-pub mod layout;
-pub mod pdf;
-pub mod prefs;
-mod qpdf;
+pub mod chant;
+pub mod chord_font;
+pub mod cli;
+pub mod gabc;
+pub mod gabc_editor;

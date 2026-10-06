@@ -1,81 +1,50 @@
-//! Detection against the chant scores in `~/Downloads/Chant` (or
-//! `CHANTEDIT_SAMPLES`). Skipped when the folder is not there.
+//! Local real-world GABC fixtures; CHANTEDIT_SAMPLES overrides ~/Downloads.
+use chantedit::{
+    chant,
+    gabc::{Chord, Document},
+};
+use std::path::PathBuf;
 
-use std::path::{Path, PathBuf};
-
-use chantedit::{analysis, pdf};
-use gtk::glib;
-
-fn sample_dir() -> PathBuf {
-    std::env::var_os("CHANTEDIT_SAMPLES")
+#[test]
+fn downloaded_chants_render_and_round_trip_with_chords() {
+    let dir = std::env::var_os("CHANTEDIT_SAMPLES")
         .map(PathBuf::from)
-        .unwrap_or_else(|| glib::home_dir().join("Downloads/Chant"))
-}
-
-fn analyse(path: &Path) -> Vec<analysis::Page> {
-    let bytes = glib::Bytes::from_owned(std::fs::read(path).unwrap());
-    let pdf = pdf::open(&bytes).unwrap();
-    (0..pdf.n_pages())
-        .map(|i| {
-            let page = pdf.page(i).expect("page");
-            pdf::analyze_page(&page).unwrap()
-        })
-        .collect()
-}
-
-fn check(name: &str, want: &[usize]) {
-    let path = sample_dir().join(name);
-    if !path.exists() {
-        eprintln!("skip {name}: not in {}", sample_dir().display());
-        return;
-    }
-    let pages = analyse(&path);
-    assert_eq!(pages.len(), want.len(), "{name}: page count");
-    for (i, (page, &n)) in pages.iter().zip(want).enumerate() {
-        assert_eq!(
-            page.staves.len(),
-            n,
-            "{name} page {}: {} staves, want {n}",
-            i + 1,
-            page.staves.len()
-        );
-        for (k, st) in page.staves.iter().enumerate() {
-            assert_eq!(
-                st.n_lines,
-                4,
-                "{name} p{} staff {k}: {} lines",
-                i + 1,
-                st.n_lines
-            );
-            let f = page.fit_line(k, 6.5);
-            assert!(
-                f.y < st.top && st.top - f.y <= 4.0 * st.space,
-                "{name} p{} staff {k}: line at {:.1}, staff top {:.1}",
-                i + 1,
-                f.y,
-                st.top
-            );
-            assert!(
-                st.notes.len() >= 5,
-                "{name} p{} staff {k}: only {} notes",
-                i + 1,
-                st.notes.len()
-            );
+        .unwrap_or_else(|| gtk::glib::home_dir().join("Downloads"));
+    for name in [
+        "hy--o_quam_glorifica--solesmes_1957.1.gabc",
+        "hy--salve_festa_dies--solesmes_1957.1.gabc",
+    ] {
+        let path = dir.join(name);
+        if !path.exists() {
+            eprintln!("skip {}", path.display());
+            continue;
+        }
+        let source = std::fs::read_to_string(path).unwrap();
+        let doc = Document::parse(source.clone()).unwrap();
+        assert_eq!(doc.serialize().unwrap(), source);
+        // Users can keep editing these local samples; create an unannotated
+        // fixture in memory before adding this test's chords.
+        let mut doc = Document::parse(doc.music.clone()).unwrap();
+        let preview = chant::render(&doc, 720.0).unwrap();
+        assert_eq!(preview.positions.len(), doc.anchors.len());
+        assert!(preview.positions.len() > 50);
+        for anchor in (0..doc.anchors.len()).step_by(5) {
+            doc.chords.push(Chord {
+                anchor,
+                text: "Dm".into(),
+                dx: -1.25,
+                dy: 2.0,
+                automatic_raise: 0.0,
+            });
+        }
+        let saved = doc.serialize().unwrap();
+        let reload = Document::parse(saved.clone()).unwrap();
+        assert_eq!(doc.chords, reload.chords);
+        assert_eq!(doc.music, reload.music);
+        assert_eq!(reload.serialize().unwrap(), saved);
+        let annotated = chant::render(&reload, 720.0).unwrap();
+        for (a, b) in preview.positions.iter().zip(&annotated.positions) {
+            assert_eq!((a.page, a.x, a.y), (b.page, b.x, b.y));
         }
     }
-}
-
-#[test]
-fn te_deum() {
-    check("Te Deum (Simple tone).pdf", &[7, 7, 7, 7, 0]);
-}
-
-#[test]
-fn cantate() {
-    check("Cantate Domino 2.pdf", &[8]);
-}
-
-#[test]
-fn mass() {
-    check("Mass5SAE_lg.pdf", &[7, 4, 6, 7, 4]);
 }

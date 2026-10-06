@@ -2,12 +2,12 @@ PREFIX ?= $(HOME)/.local
 APP_ID := dev.dominic.ChantEdit
 CARGO_TARGET_DIR ?= target
 
-.PHONY: build test install uninstall detect clean
+.PHONY: build test install uninstall clean
 
 build:
 	cargo build --release --bins
 	mkdir -p bin
-	dir=$${CARGO_TARGET_DIR:-target}; cp $$dir/release/chantedit $$dir/release/chantdetect bin/
+	dir=$${CARGO_TARGET_DIR:-target}; cp $$dir/release/chantedit bin/
 
 test:
 	cargo test
@@ -26,11 +26,6 @@ uninstall:
 		$(PREFIX)/share/mime/packages/$(APP_ID).xml
 	-update-desktop-database $(PREFIX)/share/applications
 	-update-mime-database $(PREFIX)/share/mime
-
-# Visualise detection: make detect PDF="path/to/score.pdf"
-detect: build
-	./bin/chantdetect --out /tmp/chantdetect "$(PDF)"
-	@echo "overlays written to /tmp/chantdetect"
 
 clean:
 	rm -rf bin

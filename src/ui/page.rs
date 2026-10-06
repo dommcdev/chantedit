@@ -1,7 +1,6 @@
-//! Widget showing one score page: the rendered page image plus an overlay
-//! drawn by the window (guides, chords, cursor).
+//! A vector-rendered chant staff with an editable overlay.
 
-use gtk::{gdk, glib, graphene, gsk, prelude::*, subclass::prelude::*};
+use gtk::{gdk, glib, graphene, prelude::*, subclass::prelude::*};
 
 type Painter = Box<dyn Fn(&gtk::Snapshot)>;
 
@@ -14,7 +13,6 @@ mod imp {
         /// Page size in points.
         pub size: Cell<(f64, f64)>,
         pub zoom: Cell<f64>,
-        pub texture: RefCell<Option<(gdk::Texture, f64)>>,
         pub painter: RefCell<Option<Painter>>,
     }
 
@@ -23,7 +21,6 @@ mod imp {
             PageView {
                 size: Cell::new((612.0, 792.0)),
                 zoom: Cell::new(1.0),
-                texture: RefCell::default(),
                 painter: RefCell::default(),
             }
         }
@@ -62,9 +59,6 @@ mod imp {
             let obj = self.obj();
             let bounds = graphene::Rect::new(0.0, 0.0, obj.width() as f32, obj.height() as f32);
             snapshot.append_color(&gdk::RGBA::WHITE, &bounds);
-            if let Some((texture, _)) = &*self.texture.borrow() {
-                snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &bounds);
-            }
             if let Some(paint) = &*self.painter.borrow() {
                 paint(snapshot);
             }
@@ -92,20 +86,16 @@ impl PageView {
         self.imp().size.get()
     }
 
-    pub fn set_zoom(&self, zoom: f64) {
-        if self.imp().zoom.replace(zoom) != zoom {
+    pub fn set_page_size(&self, width: f64, height: f64) {
+        if self.imp().size.replace((width, height)) != (width, height) {
             self.queue_resize();
         }
     }
 
-    /// Scale (device pixels per point) of the current page image, 0 if none.
-    pub fn texture_scale(&self) -> f64 {
-        self.imp().texture.borrow().as_ref().map_or(0.0, |t| t.1)
-    }
-
-    pub fn set_texture(&self, texture: Option<(gdk::Texture, f64)>) {
-        self.imp().texture.replace(texture);
-        self.queue_draw();
+    pub fn set_zoom(&self, zoom: f64) {
+        if self.imp().zoom.replace(zoom) != zoom {
+            self.queue_resize();
+        }
     }
 
     pub fn set_painter(&self, paint: impl Fn(&gtk::Snapshot) + 'static) {

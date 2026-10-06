@@ -1,11 +1,6 @@
 //! The libadwaita front end.
 
-mod editor;
-mod files;
 mod page;
-mod preferences;
-mod render;
-mod shortcuts;
 mod window;
 
 use std::cell::RefCell;
@@ -22,8 +17,6 @@ const ACCELS: &[(&str, &[&str])] = &[
     ("win.open", &["<Control>o"]),
     ("win.save", &["<Control>s"]),
     ("win.save-as", &["<Control><Shift>s"]),
-    ("win.export", &["<Control>e"]),
-    ("win.export-as", &["<Control><Shift>e"]),
     (
         "win.next-file",
         &["<Alt>Page_Down", "<Control>bracketright"],
@@ -36,8 +29,6 @@ const ACCELS: &[(&str, &[&str])] = &[
     ("win.zoom-out", &["<Control>minus", "<Control>KP_Subtract"]),
     ("win.zoom-fit", &["<Control>0"]),
     ("win.toggle-guides", &["<Control>g"]),
-    ("win.preferences", &["<Control>comma"]),
-    ("win.remove-line", &["<Control><Shift>Delete"]),
     ("win.shortcuts", &["F1", "<Control>question"]),
     ("app.quit", &["<Control>q"]),
 ];
